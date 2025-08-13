@@ -2,51 +2,253 @@
 
 namespace App\Filament\Resources;
 
-use App\Filament\Resources\WhatsAppTemplateResource\Pages;
 use App\Models\WhatsAppTemplate;
-use Filament\Forms;
 use Filament\Forms\Form;
+use Filament\Forms\Components\Wizard;
+use Filament\Forms\Components\Wizard\Step;
+use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Repeater;
 use Filament\Resources\Resource;
-use Filament\Tables;
 use Filament\Tables\Table;
+use Filament\Tables\Columns\TextColumn;
+use Illuminate\Support\HtmlString;
 use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Actions\EditAction;
+use Filament\Tables\Actions\Action;
+use App\Filament\Resources\WhatsAppTemplateResource\Pages;
 use App\Services\WhatsAppTemplateService;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Fieldset;
+use Filament\Forms\Components\Grid;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppTemplateResource extends Resource
 {
     protected static ?string $model = WhatsAppTemplate::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
-
     protected static ?string $navigationGroup = 'WhatsApp Service';
-
-    protected static ?string $navigationLabel = 'WhatsApp Templates';
+    protected static ?string $navigationLabel = 'Templates';
+    protected static ?string $modelLabel = 'WhatsApp Template';
 
     public static function form(Form $form): Form
     {
-        return $form
-            ->schema([
-                Forms\Components\TextInput::make('name')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('category')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('status')
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('languages')
-                    ->required()
-                    ->maxLength(255),
+        return $form->schema([
+            Fieldset::make('Informasi Template')
+                ->schema([
+                    TextInput::make('name')
+                            ->label('Template Name')
+                            ->required()
+                            ->rules([
+                                'regex:/^[a-z0-9_]+$/', // hanya huruf kecil, angka, dan underscore
+                            ])
+                            ->helperText('Gunakan huruf kecil tanpa spasi, misalnya: promo_juli_2025')
+                            ->live(onBlur: true)
+                            ->afterStateUpdated(function ($state, callable $set) {
+                                // convert ke lowercase & ganti spasi dengan underscore secara otomatis
+                                $set('name', str_replace(' ', '_', strtolower($state)));
+                            }),
+
+                        Hidden::make('languages')
+                            ->default('id')
+                            ->required(),
+
+                        Hidden::make('parameter_format')
+                            ->default('POSITIONAL')
+                            ->required(),
+
+                        Hidden::make('status')
+                            ->default('PENDING')
+                            ->required(),
+
+                        Select::make('category')
+                            ->label('Category')
+                            ->required()
+                            ->options([
+                                'MARKETING' => 'MARKETING',
+                                'UTILITY' => 'UTILITY',
+                            ])
+                ]),
+        
+                // Grid untuk Content dan Preview
+                Grid::make()
+                ->columns([
+                    'default' => 10, // total kolom grid
+                    'sm' => 10,
+                    'md' => 10,
+                    'lg' => 10,
+                ])
+                ->schema([
+                    Fieldset::make('Content')
+                        ->schema([
+                            Wizard::make([
+                                Step::make('Header')->schema([
+                                    Select::make('header.type')
+                                        ->label('Header Type')
+                                        ->options([
+                                            'none' => 'None',
+                                            'image' => 'Image',
+                                        ])
+                                        ->default('none')
+                                        ->reactive(),
+
+                                    FileUpload::make('header.media_url')
+                                        ->label('Header Image')
+                                        ->directory('whatsapp-templates/headers')
+                                        ->image()
+                                        ->visible(fn ($get) => $get('header.type') === 'image')
+                                        ->required(fn ($get) => $get('header.type') === 'image'),
+                                ]),
+                                Step::make('Body')->schema([
+                                    Textarea::make('body.text')
+                                        ->label('Body Text')
+                                        ->required()
+                                        ->placeholder('Contoh: Hai {{1}}, pesanan Anda {{2}} sedang dikirim.'),
+                                    TextInput::make('body.example')
+                                        ->helperText('Comma separated example values')
+                                ]),
+                                Step::make('Footer')->schema([
+                                    TextInput::make('footer.text')
+                                        ->label('Footer Text')
+                                        ->placeholder('Contoh: Terima kasih telah berbelanja.'),
+                                ]),
+                                Step::make('Buttons')->schema([
+                                    Repeater::make('buttons')
+                                        ->label('Action Buttons')
+                                        ->schema([
+                                            Select::make('type')
+                                                ->label('Button Type')
+                                                ->options([
+                                                    'url' => 'URL',
+                                                ])
+                                                ->required(),
+
+                                            TextInput::make('text')
+                                                ->label('Button Text')
+                                                ->required(),
+
+                                            TextInput::make('url')
+                                                ->label('URL')
+                                                ->url()
+                                                ->required(),
+                                        ])
+                                        ->maxItems(1)
+                                        ->default([]),
+                                ]),
+                            ]),
+                        ])->columns(1)->columnSpan(7),
+
+                    Fieldset::make('Preview')
+                        ->schema([
+                            
+                        ])
+                        ->columns(1)->columnSpan(3),
+                ])
             ]);
+    }
+
+    public static function mutateFormDataBeforeCreate(array $data): array
+    {
+        return self::prepareComponentData($data);
+    }
+
+    public static function mutateFormDataBeforeSave(array $data): array
+    {   
+        return self::prepareComponentData($data);
+    }
+
+    protected static function prepareComponentData(array $data): array
+    {
+        $components = [];
+
+        // HEADER
+        if (!empty($data['header']['type']) && $data['header']['type'] !== 'none') {
+            if ($data['header']['type'] === 'image') {
+                $mediaUrl = !empty($data['header']['media_url']) 
+                    ? storage_path('app/public/' . $data['header']['media_url']) 
+                    : null;
+
+                if (!file_exists($mediaUrl)) {
+                    throw new \Exception("File header image tidak ditemukan: {$mediaUrl}");
+                }
+
+                // Upload media ke WhatsApp
+                $mediaId = app(\App\Services\WhatsAppTemplateService::class)
+                    ->uploadMediaToWhatsApp($mediaUrl, 'image');
+
+                $components[] = [
+                    'type' => 'HEADER',
+                    'format' => 'IMAGE',
+                    'example' => [
+                        'header_handle' => [
+                            $mediaId,
+                        ],
+                    ],
+                ];
+            }
+        }
+
+        // BODY
+        if (!empty($data['body']['text'])) {
+            preg_match_all('/\{\{(\d+)\}\}/', $data['body']['text'], $matches);
+            $parameterCount = count($matches[1]);
+
+            $exampleValues = [];
+            if (!empty($data['body']['example'])) {
+                $exampleValues = array_map('trim', explode(',', $data['body']['example']));
+            }
+
+            $components[] = [
+                'type' => 'BODY',
+                'text' => $data['body']['text'],
+                'example' => [
+                    'body_text' => [array_slice($exampleValues, 0, $parameterCount)],
+                ],
+            ];
+        }
+
+        // FOOTER
+        if (!empty($data['footer']['text'])) {
+            $components[] = [
+                'type' => 'FOOTER',
+                'text' => $data['footer']['text'],
+            ];
+        }
+
+        // BUTTONS
+        if (!empty($data['buttons'])) {
+            $buttons = array_map(function ($button) {
+                return [
+                    'type' => strtoupper($button['type']),
+                    'text' => $button['text'],
+                    'url' => $button['url'],
+                ];
+            }, $data['buttons']);
+
+            $components[] = [
+                'type' => 'BUTTONS',
+                'buttons' => $buttons,
+            ];
+        }
+
+        $data['components'] = $components;
+
+        // Cleanup
+        unset($data['header'], $data['body'], $data['footer'], $data['buttons']);
+
+        
+        return $data;
     }
 
     public static function table(Table $table): Table
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('name'),
-                Tables\Columns\TextColumn::make('category'),
+                TextColumn::make('name'),
+                TextColumn::make('category'),
                 // Ganti TextColumn jadi BadgeColumn
                 BadgeColumn::make('status')
                     ->label('Status')
@@ -55,14 +257,23 @@ class WhatsAppTemplateResource extends Resource
                         'warning' => 'PENDING',
                         'danger'  => 'REJECTED',
                     ]),
-                Tables\Columns\TextColumn::make('languages'),
+                TextColumn::make('languages'),
             ])
             ->filters([
                 //
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
-                Tables\Actions\Action::make('preview')
+                Action::make('retry')
+                    ->label('Retry')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color('warning')
+                    ->visible(fn ($record) => $record->status === 'FAILED')
+                    ->requiresConfirmation()
+                    ->action(function ($record) {
+                        // Panggil service untuk retry
+                        app(WhatsAppTemplateService::class)->pushTemplate($record);
+                    }),
+                Action::make('preview')
                     ->label('Preview')
                     ->icon('heroicon-o-eye')
                     ->modalHeading('Preview Template')
@@ -72,7 +283,7 @@ class WhatsAppTemplateResource extends Resource
                     ->button(),
             ])
             ->headerActions([
-                Tables\Actions\Action::make('Sync Now')
+                Action::make('Sync Now')
                     ->icon('heroicon-o-arrow-path-rounded-square')
                     ->color('success')
                     ->action(function () {
@@ -94,29 +305,10 @@ class WhatsAppTemplateResource extends Resource
             ]);
     }
 
-    public static function getRelations(): array
-    {
-        return [
-            //
-        ];
-    }
-
     public static function getPages(): array
     {
         return [
             'index' => Pages\ListWhatsAppTemplates::route('/'),
-            'create' => Pages\CreateWhatsAppTemplate::route('/create'),
-            'edit' => Pages\EditWhatsAppTemplate::route('/{record}/edit'),
         ];
-    }
-
-    public static function getModelLabel(): string
-    {
-        return 'WhatsApp Template'; // singular
-    }
-
-    public static function getPluralModelLabel(): string
-    {
-        return 'WhatsApp Templates'; // plural
     }
 }

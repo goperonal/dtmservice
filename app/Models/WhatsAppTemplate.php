@@ -15,10 +15,13 @@ class WhatsAppTemplate extends Model
         'category',
         'components',
         'parameter_format',
+        'header_image_url',
     ];
 
     protected $casts = [
         'languages' => 'array',
         'components' => 'array',
     ];
+
+    
 }

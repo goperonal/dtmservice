@@ -16,4 +16,9 @@ class EditWhatsAppTemplate extends EditRecord
             Actions\DeleteAction::make(),
         ];
     }
+
+    protected function mutateFormDataBeforeUpdate(array $data): array
+    {
+        return WhatsAppTemplateResource::mutateFormDataBeforeUpdate($data);
+    }
 }

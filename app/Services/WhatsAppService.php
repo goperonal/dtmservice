@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppService
 {
@@ -17,30 +18,72 @@ class WhatsAppService
         $this->url = config('services.whatsapp.url');
     }
 
-    public function sendTemplate($to, $templateName, $variables = [], $category = 'marketing')
+    public function sendWhatsAppTemplate($recipientNumber, $template)
     {
+        $components = [];
+
+        foreach ($template->components as $component) {
+            switch (strtoupper($component['type'])) {
+                case 'HEADER':
+                    if (!empty($component['format']) && $component['format'] === 'IMAGE') {
+                        $imageLink = $template->header_image_url ?? null;
+
+                        if ($imageLink) {
+                            $components[] = [
+                                "type" => "header",
+                                "parameters" => [
+                                    [
+                                        "type" => "image",
+                                        "image" => [
+                                            "link" => rtrim(config('app.url'), '/') . $imageLink
+                                        ]
+                                    ]
+                                ]
+                            ];
+                        }
+                    }
+                    break;
+
+                    case 'BODY':
+                        // Ambil dari example template jika ada
+                        if (!empty($component['example']['body_text'][0])) {
+                            $bodyParameters = [];
+                            foreach ($component['example']['body_text'][0] as $param) {
+                                $bodyParameters[] = [
+                                    "type" => "text",
+                                    "text" => $param
+                                ];
+                            }
+                    
+                            $components[] = [
+                                "type" => "body",
+                                "parameters" => $bodyParameters
+                            ];
+                        }
+                        break;
+            }
+        }
+
         $payload = [
-            'messaging_product' => 'whatsapp',
-            'to' => $to,
-            'type' => 'template',
-            'template' => [
-                'name' => $templateName,
-                'language' => ['code' => 'id'], // ubah jadi en_US kalau default template Meta
-                'components' => [
-                    [
-                        'type' => 'body',
-                        'parameters' => collect($variables)->map(fn($val) => [
-                            'type' => 'text',
-                            'text' => $val
-                        ])->values()->toArray()
-                    ]
-                ]
+            "messaging_product" => "whatsapp",
+            "to" => $recipientNumber,
+            "type" => "template",
+            "template" => [
+                "name" => $template->name,
+                "language" => [
+                    "code" => "id"
+                ],
+                "components" => $components
             ]
         ];
 
+        Log::info('Payload:', $payload);
+
         $response = Http::withToken($this->token)
+            ->acceptJson()
             ->post("{$this->url}/{$this->phoneId}/messages", $payload);
 
         return $response->json();
     }
+
 }
