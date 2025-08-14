@@ -34,6 +34,8 @@ class WhatsAppTemplateResource extends Resource
     protected static ?string $navigationLabel = 'Templates';
     protected static ?string $modelLabel = 'WhatsApp Template';
 
+    protected static ?int $navigationSort = 3;
+
     public static function form(Form $form): Form
     {
         return $form->schema([

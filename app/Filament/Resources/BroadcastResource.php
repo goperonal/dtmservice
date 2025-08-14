@@ -16,6 +16,8 @@ use App\Models\WhatsAppTemplate;
 use App\Models\Recipient;
 use App\Models\BroadcastMessage;
 use App\Models\Campaign;
+use Filament\Tables\Actions\Action;
+use App\Models\WhatsappWebhook;
 
 class BroadcastResource extends Resource
 {
@@ -55,18 +57,42 @@ class BroadcastResource extends Resource
                     ->label('Sent At'),
             ])
             ->actions([
-                //
+                Action::make('seeLog')
+                    ->label('See Log')
+                    ->icon('heroicon-o-clipboard-document-list')
+                    ->modalHeading('Broadcast Webhook Logs')
+                    ->modalButton('Close')
+                    ->modalContent(function ($record) {
+                        $logs = WhatsappWebhook::where('broadcast_id', $record->id)
+                            ->orderByDesc('created_at')
+                            ->get()
+                            ->map(function ($log) {
+                                $payload = json_decode($log->payload, true);
+                                return [
+                                    'status' => $payload['status'] ?? '-',
+                                    'timestamp' => isset($payload['timestamp'])
+                                        ? date('Y-m-d H:i:s', $payload['timestamp'])
+                                        : null,
+                                    'recipient_id' => $payload['recipient_id'] ?? '-',
+                                    'raw' => json_encode($payload, JSON_PRETTY_PRINT),
+                                ];
+                            });
+            
+                        return view('filament.custom.broadcast-logs', [
+                            'logs' => $logs,
+                        ]);
+                    })
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('campaign_id')
-                ->label('Campaign')
-                ->options(
-                    Campaign::query()
-                        ->distinct()
-                        ->orderBy('name')
-                        ->pluck('name', 'id') // key = id, value = name
-                        ->filter()
-                )            
+                    ->label('Campaign')
+                    ->options(
+                        Campaign::query()
+                            ->distinct()
+                            ->orderBy('name')
+                            ->pluck('name', 'id') // key = id, value = name
+                            ->filter()
+                    )            
             ]);
     }
 

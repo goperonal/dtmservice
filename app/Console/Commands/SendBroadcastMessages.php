@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use App\Models\BroadcastMessage;
 use App\Services\WhatsAppService;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class SendBroadcastMessages extends Command
 {
@@ -61,6 +62,8 @@ class SendBroadcastMessages extends Command
                 ]);
 
                 $this->info("Pesan {$message->id} terkirim ke {$recipientNumber}");
+                sleep(5);
+
             } catch (\Throwable $e) {
                 $message->update([
                     'status' => 'failed',

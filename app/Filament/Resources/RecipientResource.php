@@ -12,12 +12,20 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use pxlrbt\FilamentExcel\Actions\Tables\ExportBulkAction;
+use pxlrbt\FilamentExcel\Actions\Tables\ExportAction;
+use Maatwebsite\Excel\Facades\Excel;
+use Filament\Tables\Actions\Action;
+use Filament\Forms\Components\FileUpload;
+use Filament\Notifications\Notification;
+use App\Services\RecipientsImport;
 
 class RecipientResource extends Resource
 {
     protected static ?string $model = Recipient::class;
     protected static ?string $navigationIcon = 'heroicon-o-phone';
     protected static ?string $navigationGroup = 'WhatsApp Service';
+    protected static ?int $navigationSort = 4;
 
     public static function form(Forms\Form $form): Forms\Form
     {
@@ -72,12 +80,38 @@ class RecipientResource extends Resource
                 Tables\Filters\SelectFilter::make('group')
                     ->options(Recipient::query()->distinct()->pluck('group', 'group')->filter()),
             ])
+            ->headerActions([
+                ExportAction::make()
+                    ->icon('heroicon-o-document-arrow-up'),
+                Action::make('import')
+                    ->label('Import')
+                    ->icon('heroicon-o-document-arrow-down')
+                    ->form([
+                        FileUpload::make('file')
+                            ->label('Pilih File Excel')
+                            ->acceptedFileTypes([
+                                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                'application/vnd.ms-excel',
+                            ])
+                            ->required(),
+                    ])
+                    ->action(function (array $data) {
+                        $path = storage_path('app/public/' . $data['file']);
+                        Excel::import(new RecipientsImport, $path);
+                        \Filament\Notifications\Notification::make()
+                            ->title('Import berhasil')
+                            ->success()
+                            ->send();
+                    }),
+            ])
             ->actions([
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])
             ->bulkActions([
                 Tables\Actions\DeleteBulkAction::make(),
+                ExportBulkAction::make()
+                    ->icon('heroicon-o-document-arrow-up'),
             ]);
     }
 

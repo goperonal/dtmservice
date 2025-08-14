@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use App\Models\Campaign;
 use App\Models\WhatsAppTemplate;
 use App\Models\Recipient;
+use App\Models\WhatsappWebhook;
 
 class BroadcastMessage extends Model
 {
@@ -38,5 +39,16 @@ class BroadcastMessage extends Model
     public function recipient()
     {
         return $this->belongsTo(Recipient::class);
+    }
+
+    public function webhooks()
+    {
+        return $this->hasMany(WhatsappWebhook::class, 'broadcast_id', 'id');
+    }
+
+    public function latestWebhook()
+    {
+        return $this->hasOne(WhatsappWebhook::class, 'broadcast_id', 'id')
+            ->latest('id');
     }
 }

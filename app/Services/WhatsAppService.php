@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 class WhatsAppService
 {
@@ -76,8 +75,6 @@ class WhatsAppService
                 "components" => $components
             ]
         ];
-
-        Log::info('Payload:', $payload);
 
         $response = Http::withToken($this->token)
             ->acceptJson()
