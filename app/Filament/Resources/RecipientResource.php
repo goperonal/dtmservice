@@ -25,7 +25,7 @@ class RecipientResource extends Resource
     protected static ?string $model = Recipient::class;
     protected static ?string $navigationIcon = 'heroicon-o-phone';
     protected static ?string $navigationGroup = 'WhatsApp Service';
-    protected static ?int $navigationSort = 4;
+    protected static ?int $navigationSort = 1;
 
     public static function form(Forms\Form $form): Forms\Form
     {
@@ -74,7 +74,9 @@ class RecipientResource extends Resource
                 Tables\Columns\TextColumn::make('name'),
                 Tables\Columns\TextColumn::make('phone'),
                 Tables\Columns\TextColumn::make('group'),
-                Tables\Columns\TextColumn::make('notes')->limit(50),
+                Tables\Columns\TextColumn::make('notes')
+                ->searchable()
+                ->limit(50),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('group')
