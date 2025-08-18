@@ -3,22 +3,20 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\RecipientResource\Pages;
-use App\Filament\Resources\RecipientResource\RelationManagers;
 use App\Models\Recipient;
+use App\Models\Group;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use pxlrbt\FilamentExcel\Actions\Tables\ExportBulkAction;
 use pxlrbt\FilamentExcel\Actions\Tables\ExportAction;
-use Maatwebsite\Excel\Facades\Excel;
 use Filament\Tables\Actions\Action;
 use Filament\Forms\Components\FileUpload;
-use Filament\Notifications\Notification;
+use Maatwebsite\Excel\Facades\Excel;
 use App\Services\RecipientsImport;
+use Filament\Tables\Filters\SelectFilter;
 
 class RecipientResource extends Resource
 {
@@ -27,7 +25,7 @@ class RecipientResource extends Resource
     protected static ?string $navigationGroup = 'WhatsApp Service';
     protected static ?int $navigationSort = 1;
 
-    public static function form(Forms\Form $form): Forms\Form
+    public static function form(Form $form): Form
     {
         return $form
             ->schema([
@@ -43,44 +41,46 @@ class RecipientResource extends Resource
                     ->regex('/^628[0-9]{7,12}$/')
                     ->helperText('Gunakan format 628xxxxxxxxx'),
 
-                    Forms\Components\Select::make('group')
-                    ->label('Group')
+                // relasi ke banyak group
+                Forms\Components\Select::make('groups')
+                    ->label('Groups')
+                    ->multiple()
+                    ->relationship('groups', 'name')
                     ->searchable()
+                    ->preload()
                     ->createOptionForm([
-                        Forms\Components\TextInput::make('group')
+                        Forms\Components\TextInput::make('name')
                             ->label('Group Name')
                             ->required(),
-                    ])
-                    ->createOptionUsing(function (array $data) {
-                        return $data['group']; // Kembalikan value yang akan dipakai di field
-                    })
-                    ->options(fn () => \App\Models\Recipient::query()
-                        ->whereNotNull('group')
-                        ->distinct()
-                        ->pluck('group', 'group')
-                        ->filter()
-                ),                
-                
+                    ]),
+
                 Forms\Components\Textarea::make('notes')
                     ->label('Notes')
                     ->rows(3),
             ]);
     }
 
-    public static function table(Tables\Table $table): Tables\Table
+    public static function table(Table $table): Table
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('name'),
-                Tables\Columns\TextColumn::make('phone'),
-                Tables\Columns\TextColumn::make('group'),
+                Tables\Columns\TextColumn::make('name')->sortable()->searchable(),
+                Tables\Columns\TextColumn::make('phone')->sortable()->searchable(),
+
+                Tables\Columns\TextColumn::make('groups.name')
+                    ->label('Groups')
+                    ->badge()
+                    ->sortable()
+                    ->searchable(),
+
                 Tables\Columns\TextColumn::make('notes')
-                ->searchable()
-                ->limit(50),
+                    ->searchable()
+                    ->limit(50),
             ])
             ->filters([
-                Tables\Filters\SelectFilter::make('group')
-                    ->options(Recipient::query()->distinct()->pluck('group', 'group')->filter()),
+                SelectFilter::make('groups')
+                    ->label('Group')
+                    ->relationship('groups', 'name'),
             ])
             ->headerActions([
                 ExportAction::make()
@@ -100,6 +100,7 @@ class RecipientResource extends Resource
                     ->action(function (array $data) {
                         $path = storage_path('app/public/' . $data['file']);
                         Excel::import(new RecipientsImport, $path);
+
                         \Filament\Notifications\Notification::make()
                             ->title('Import berhasil')
                             ->success()

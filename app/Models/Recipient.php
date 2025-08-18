@@ -12,4 +12,11 @@ class Recipient extends Model
         'group',
         'notes',
     ];
+
+    public function groups()
+    {
+        return $this->belongsToMany(Group::class, 'group_recipient', 'recipient_id', 'group_id')
+            ->withTimestamps();
+    }
 }
+

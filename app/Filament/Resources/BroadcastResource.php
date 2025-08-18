@@ -54,7 +54,8 @@ class BroadcastResource extends Resource
                     ->label('Status'),
                 Tables\Columns\TextColumn::make('sent_at')
                     ->dateTime()
-                    ->label('Sent At'),
+                    ->label('Sent At')
+                    ->sortable(),
             ])
             ->actions([
                 Action::make('seeLog')
@@ -92,8 +93,42 @@ class BroadcastResource extends Resource
                             ->orderBy('name')
                             ->pluck('name', 'id') // key = id, value = name
                             ->filter()
-                    )            
-            ]);
+                    ),
+                Tables\Filters\SelectFilter::make('status')
+                    ->label('Status')
+                    ->options([
+                        'pending' => 'Pending',
+                        'sent' => 'Sent',
+                        'failed' => 'Failed',
+                        'delivered' => 'Delivered',
+                        'read' => 'Read'
+                    ])
+            ])
+            ->headerActions([
+                Tables\Actions\Action::make('sendBroadcast')
+                    ->label('Send Pending Broadcasts')
+                    ->icon('heroicon-o-paper-airplane')
+                    ->color('success')
+                    ->requiresConfirmation()
+                    ->action(function () {
+                        // Jalankan artisan command
+                        \Artisan::call('broadcast:send');
+
+                        // Ambil output command untuk ditampilkan
+                        $output = \Artisan::output();
+
+                        // Tambahkan notifikasi sukses
+                        \Filament\Notifications\Notification::make()
+                            ->title('Broadcast Executed')
+                            ->body("Command executed:\n\n{$output}")
+                            ->success()
+                            ->send();
+                    })
+                    ->disabled(function () {
+                        // Disable kalau tidak ada pending
+                        return ! \App\Models\BroadcastMessage::where('status', 'pending')->exists();
+                    })
+                ]);
     }
 
     public static function getRelations(): array

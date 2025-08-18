@@ -43,5 +43,10 @@ return [
         'apps_id' => env('WHATSAPP_APPS_ID'),
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
     ],
+    'whatsapp_prices' => [
+        'marketing' => env('WHATSAPP_PRICE_MARKETING', 586.33),
+        'utility' => env('WHATSAPP_PRICE_UTILITY', 356.65),
+        'authentication' => env('WHATSAPP_PRICE_AUTHENTICATION', 356.65),
+    ],
 
 ];

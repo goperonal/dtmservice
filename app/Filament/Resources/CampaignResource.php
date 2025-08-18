@@ -6,6 +6,7 @@ use App\Filament\Resources\CampaignResource\Pages;
 use App\Models\Campaign;
 use App\Models\Recipient;
 use App\Models\WhatsAppTemplate;
+use App\Models\Group;
 use App\Models\BroadcastMessage;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -13,7 +14,6 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use App\Filament\Resources\BroadcastResource;
 use Filament\Forms\Get;
 
@@ -39,17 +39,18 @@ class CampaignResource extends Resource
                     ->required()
                     ->searchable(),
 
-                    Forms\Components\Select::make('send_mode')
+                Forms\Components\Select::make('send_mode')
                     ->label('Send Mode')
                     ->options([
                         'single' => 'Single Recipient',
                         'group'  => 'Recipient Group',
                     ])
-                    ->default('single') // pastikan ada nilai awal
+                    ->default('single')
                     ->reactive()
                     ->required()
-                    ->dehydrated(true), // biar ikut masuk ke state
+                    ->dehydrated(true),
                 
+                // --- Single Recipient ---
                 Forms\Components\Select::make('recipient_id')
                     ->label('Recipient')
                     ->options(Recipient::query()->orderBy('name')->pluck('name', 'id'))
@@ -58,14 +59,13 @@ class CampaignResource extends Resource
                     ->visible(fn (Get $get) => $get('send_mode') === 'single')
                     ->dehydrated(fn (Get $get) => $get('send_mode') === 'single'),
                 
-                Forms\Components\Select::make('group')
+                // --- Group Recipient (pakai tabel groups) ---
+                Forms\Components\Select::make('group_id')
                     ->label('Group')
                     ->options(
-                        Recipient::query()
-                            ->whereNotNull('group')->where('group', '!=', '')
-                            ->distinct()->orderBy('group')
-                            ->pluck('group', 'group')
+                        Group::query()->orderBy('name')->pluck('name', 'id')
                     )
+                    ->multiple()
                     ->searchable()
                     ->visible(fn (Get $get) => $get('send_mode') === 'group')
                     ->dehydrated(fn (Get $get) => $get('send_mode') === 'group'),
@@ -89,10 +89,8 @@ class CampaignResource extends Resource
                     'tableFilters[campaign_id][value]' => $record->id
                 ]);
             })
-            ->filters([
-            ])
-            ->actions([
-            ])
+            ->filters([])
+            ->actions([])
             ->bulkActions([]);
     }
 
