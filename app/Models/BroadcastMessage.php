@@ -7,6 +7,7 @@ use App\Models\Campaign;
 use App\Models\WhatsAppTemplate;
 use App\Models\Recipient;
 use App\Models\WhatsappWebhook;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class BroadcastMessage extends Model
 {
@@ -53,14 +54,23 @@ class BroadcastMessage extends Model
         return $this->hasOne(\App\Models\WhatsappWebhook::class, 'broadcast_id')->latestOfMany();
     }
 
+    public function latestWebhookByWamid(): HasOne
+    {
+        // match via message_id (webhook) = wamid (broadcast)
+        return $this->hasOne(\App\Models\WhatsappWebhook::class, 'message_id', 'wamid')
+            ->latestOfMany();
+    }
+
     public function getErrorMessageAttribute(): ?string
     {
-        if ($this->status !== 'failed') {
-            return null;
-        }
+        if ($this->status !== 'failed') return null;
 
-        $payload = $this->latestWebhook?->payload;
-        if (! is_array($payload) && is_string($payload)) {
+        // ambil webhook terbaru by WAMID; fallback ke relasi lama kalau ada
+        $payload = $this->latestWebhookByWamid?->payload
+            ?? $this->latestWebhook?->payload // kalau sebelumnya kamu sudah punya latestWebhook by broadcast_id
+            ?? null;
+
+        if (!is_array($payload) && is_string($payload)) {
             $payload = json_decode($payload, true);
         }
 
@@ -70,17 +80,15 @@ class BroadcastMessage extends Model
             ?? data_get($payload, 'message')
             ?? data_get($payload, 'status_description');
 
-        // fallback dari response_payload kalau ada
-        if (! $msg) {
+        // fallback dari response_payload bila perlu
+        if (!$msg) {
             $rp = $this->response_payload;
-            if (! is_array($rp) && is_string($rp)) {
-                $rp = json_decode($rp, true);
-            }
+            if (!is_array($rp) && is_string($rp)) $rp = json_decode($rp, true);
             $msg =
                 data_get($rp, 'error.message')
                 ?? data_get($rp, 'messages.0.errors.0.details');
         }
 
-        return $msg;
+        return $msg ?: null;
     }
 }

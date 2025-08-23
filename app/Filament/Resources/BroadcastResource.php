@@ -78,18 +78,19 @@ class BroadcastResource extends Resource
                         $query = \App\Models\WhatsappWebhook::query();
 
                         if ($record->wamid) {
-                            // Prioritaskan mencocokkan WAMID dari payload JSON
-                            $query->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.id')) = ?", [$record->wamid]);
+                            // pakai message_id agar akurat lintas campaign
+                            $query->where('message_id', $record->wamid);
                         } else {
-                            // fallback ke broadcast_id
+                            // fallback ke broadcast_id jika belum ada WAMID
                             $query->where('broadcast_id', $record->id);
                         }
 
                         $logs = $query->orderByDesc('id')->get()->map(function ($log) {
                             $payload = is_array($log->payload) ? $log->payload : (json_decode($log->payload, true) ?: []);
+                            $ts = data_get($payload, 'timestamp');
                             return [
                                 'status'       => data_get($payload, 'status', '-'),
-                                'timestamp'    => ($t = data_get($payload, 'timestamp')) ? date('Y-m-d H:i:s', (int) $t) : null,
+                                'timestamp'    => is_numeric($ts) ? date('Y-m-d H:i:s', (int) $ts) : null,
                                 'recipient_id' => data_get($payload, 'recipient_id', '-'),
                                 'raw'          => json_encode($payload, JSON_PRETTY_PRINT),
                             ];
