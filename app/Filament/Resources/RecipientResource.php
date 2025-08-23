@@ -17,6 +17,7 @@ use Filament\Forms\Components\FileUpload;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Services\RecipientsImport;
 use Filament\Tables\Filters\SelectFilter;
+use Illuminate\Support\Facades\Storage;
 
 class RecipientResource extends Resource
 {
@@ -91,6 +92,8 @@ class RecipientResource extends Resource
                     ->form([
                         FileUpload::make('file')
                             ->label('Pilih File Excel')
+                            ->disk('public')                       // simpan ke disk 'public'
+                            ->directory('imports/recipients')      // folder khusus
                             ->acceptedFileTypes([
                                 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                 'application/vnd.ms-excel',
@@ -98,14 +101,26 @@ class RecipientResource extends Resource
                             ->required(),
                     ])
                     ->action(function (array $data) {
-                        $path = storage_path('app/public/' . $data['file']);
-                        Excel::import(new RecipientsImport, $path);
+                        // Verifikasi dulu file-nya ada
+                        if (! Storage::disk('public')->exists($data['file'])) {
+                            \Filament\Notifications\Notification::make()
+                                ->title('File tidak ditemukan')
+                                ->body('Silakan upload ulang file Excel-nya.')
+                                ->danger()
+                                ->send();
+                            return;
+                        }
+
+                        // Kirim path RELATIF + DISK (benar)
+                        Excel::queueImport(new RecipientsImport, $data['file'], 'public');
 
                         \Filament\Notifications\Notification::make()
-                            ->title('Import berhasil')
+                            ->title('Import diproses')
+                            ->body('File sedang diproses di antrian. Refresh tabel beberapa saat lagi.')
                             ->success()
                             ->send();
                     }),
+
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),

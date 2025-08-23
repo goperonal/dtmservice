@@ -4,73 +4,42 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\Models\BroadcastMessage;
-use App\Services\WhatsAppService;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Bus;
+use App\Jobs\SendBroadcastMessage;
 
 class SendBroadcastMessages extends Command
 {
-    protected $signature = 'broadcast:send';
-    protected $description = 'Kirim pesan broadcast WhatsApp berdasarkan data di DB';
+    protected $signature = 'broadcast:send {--campaign=} {--chunk=1000}';
+    protected $description = 'Enqueue jobs untuk mengirim broadcast WhatsApp';
 
-    public function handle(WhatsAppService $whatsappService)
+    public function handle()
     {
-        $messages = BroadcastMessage::with(['campaign.whatsappTemplate', 'recipient'])
+        $campaignId = $this->option('campaign');
+        $chunk      = (int) $this->option('chunk');
+
+        $query = BroadcastMessage::query()
             ->where('status', 'pending')
-            ->limit(20)
-            ->get();
+            ->when($campaignId, fn ($q) => $q->where('campaign_id', $campaignId));
 
-        if ($messages->isEmpty()) {
-            $this->info("Tidak ada pesan pending.");
-            return;
+        $total = (clone $query)->count();
+        if ($total === 0) {
+            $this->info('Tidak ada pesan pending.');
+            return self::SUCCESS;
         }
 
-        foreach ($messages as $message) {
-            try {
-                $template = $message->campaign->whatsappTemplate;
-                $recipientNumber = $message->recipient->phone;
-                
+        $this->info("Menemukan {$total} pesan pending. Mengantrikan...");
 
-                if (!$template || !$recipientNumber) {
-                    $this->warn("Data template atau nomor tidak ditemukan untuk ID {$message->id}");
-                    $message->update([
-                        'status' => 'failed',
-                        'response_payload' => ['error' => 'Template atau nomor tidak ditemukan']
-                    ]);
-                    continue;
-                }
+        $query->orderBy('id')->chunkById($chunk, function ($messages) {
+            $jobs = $messages->pluck('id')->map(fn($id) => new SendBroadcastMessage($id))->all();
 
-                // Kirim
-                $response = $whatsappService->sendWhatsAppTemplate($recipientNumber, $template);
+            $batch = Bus::batch($jobs)
+                ->name('manual-broadcast')
+                ->onQueue('broadcasts')
+                ->dispatch();
 
-                // Cek apakah API balas error
-                if (isset($response['error'])) {
-                    $message->update([
-                        'status' => 'failed',
-                        'response_payload' => $response
-                    ]);
-                    $this->error("Gagal kirim pesan {$message->id}: {$response['error']['message']}");
-                    continue;
-                }
+            $this->info("Batch {$batch->id} dibuat (".count($jobs)." jobs).");
+        });
 
-                // Sukses
-                $message->update([
-                    'status' => 'sent',
-                    'sent_at' => now(),
-                    'wamid' => $response['messages'][0]['id'] ?? null,
-                    'response_payload' => $response
-                ]);
-
-                $this->info("Pesan {$message->id} terkirim ke {$recipientNumber}");
-                sleep(5);
-
-            } catch (\Throwable $e) {
-                $message->update([
-                    'status' => 'failed',
-                    'response_payload' => ['error' => $e->getMessage()]
-                ]);
-                $this->error("Exception saat kirim pesan {$message->id}: {$e->getMessage()}");
-            }
-        }
+        return self::SUCCESS;
     }
 }

@@ -128,36 +128,48 @@ class WhatsAppTemplateService
     }
 
 
-    public function uploadMediaToWhatsApp(string $fileUrl): string
+    public function uploadMediaToWhatsApp(string $localPath): string
     {
-        $phoneNumberId = config('services.whatsapp.phone_id');
-        $baseUrl = rtrim(config('services.whatsapp.url'), '/');
-        $token = config('services.whatsapp.token');
+        $accessToken = config('services.whatsapp.token');
+        $appId = config('services.whatsapp.app_id'); // APP_ID
+        $baseUrl = rtrim(config('services.whatsapp.url'), '/'); // https://graph.facebook.com/v23.0
 
-        // Ambil isi file dari URL
-        $fileContents = file_get_contents($fileUrl);
+        $fileContents = file_get_contents($localPath);
         if ($fileContents === false) {
-            throw new \Exception("Gagal mengambil file dari URL: $fileUrl");
+            throw new \Exception("Gagal membaca file: $localPath");
         }
 
-        // Deteksi nama file dari URL
-        $filename = basename(parse_url($fileUrl, PHP_URL_PATH));
+        $fileSize = filesize($localPath);
+        $fileName = basename($localPath);
+        $fileType = 'image/png'; // karena PNG
 
-        // Buat URL endpoint upload
-        $uploadUrl = "{$baseUrl}/{$phoneNumberId}/media";
+        // Step 1: Start Upload Session
+        $sessionResp = Http::get("{$baseUrl}/{$appId}/uploads", [
+            'file_name'   => $fileName,
+            'file_length' => $fileSize,
+            'file_type'   => $fileType,
+            'access_token'=> $accessToken,
+        ])->json();
 
-        // Kirim permintaan POST ke API WhatsApp
-        $response = Http::withToken($token)
-            ->attach('file', $fileContents, $filename)
-            ->post($uploadUrl, [
-                'messaging_product' => 'whatsapp',
-            ]);
-
-        if ($response->failed()) {
-            throw new \Exception("Gagal upload media ke WhatsApp: " . $response->body());
+        $uploadSessionId = str_replace('upload:', '', $sessionResp['id'] ?? '');
+        if (!$uploadSessionId) {
+            throw new \Exception('Gagal memulai upload session.');
         }
 
-        return $response->json('id');
+        // Step 2: Upload File
+        $uploadResp = Http::withHeaders([
+            'Authorization' => "OAuth {$accessToken}",
+            'file_offset'   => 0,
+        ])->withBody($fileContents, $fileType)
+        ->post("{$baseUrl}/upload:{$uploadSessionId}")
+        ->json();
+
+        if (!isset($uploadResp['h'])) {
+            throw new \Exception('Gagal upload file ke WhatsApp.');
+        }
+
+        return $uploadResp['h']; // handle untuk template
     }
+
 
 }

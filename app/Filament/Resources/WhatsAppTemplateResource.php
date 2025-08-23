@@ -11,29 +11,25 @@ use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Repeater;
-use Filament\Resources\Resource;
-use Filament\Tables\Table;
-use Filament\Tables\Columns\TextColumn;
-use Illuminate\Support\HtmlString;
-use Filament\Tables\Columns\BadgeColumn;
-use Filament\Tables\Actions\EditAction;
-use Filament\Tables\Actions\Action;
-use App\Filament\Resources\WhatsAppTemplateResource\Pages;
-use App\Services\WhatsAppTemplateService;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Fieldset;
 use Filament\Forms\Components\Grid;
+use Filament\Resources\Resource;
+use Filament\Tables\Table;
+use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Columns\BadgeColumn;
+use Filament\Tables\Actions\Action;
+use App\Filament\Resources\WhatsAppTemplateResource\Pages;
+use App\Services\WhatsAppTemplateService;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppTemplateResource extends Resource
 {
     protected static ?string $model = WhatsAppTemplate::class;
-
     protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
     protected static ?string $navigationGroup = 'WhatsApp Service';
     protected static ?string $navigationLabel = 'Templates';
     protected static ?string $modelLabel = 'WhatsApp Template';
-
     protected static ?int $navigationSort = 2;
 
     public static function form(Form $form): Form
@@ -42,47 +38,27 @@ class WhatsAppTemplateResource extends Resource
             Fieldset::make('Informasi Template')
                 ->schema([
                     TextInput::make('name')
-                            ->label('Template Name')
-                            ->required()
-                            ->rules([
-                                'regex:/^[a-z0-9_]+$/', // hanya huruf kecil, angka, dan underscore
-                            ])
-                            ->helperText('Gunakan huruf kecil tanpa spasi, misalnya: promo_juli_2025')
-                            ->live(onBlur: true)
-                            ->afterStateUpdated(function ($state, callable $set) {
-                                // convert ke lowercase & ganti spasi dengan underscore secara otomatis
-                                $set('name', str_replace(' ', '_', strtolower($state)));
-                            }),
+                        ->label('Template Name')
+                        ->required()
+                        ->rules(['regex:/^[a-z0-9_]+$/'])
+                        ->helperText('Gunakan huruf kecil tanpa spasi, misalnya: promo_juli_2025')
+                        ->live(onBlur: true)
+                        ->afterStateUpdated(fn($state, $set) => $set('name', str_replace(' ', '_', strtolower($state)))),
 
-                        Hidden::make('languages')
-                            ->default('id')
-                            ->required(),
+                    Hidden::make('languages')->default('id')->required(),
+                    Hidden::make('parameter_format')->default('POSITIONAL')->required(),
+                    Hidden::make('status')->default('PENDING')->required(),
 
-                        Hidden::make('parameter_format')
-                            ->default('POSITIONAL')
-                            ->required(),
-
-                        Hidden::make('status')
-                            ->default('PENDING')
-                            ->required(),
-
-                        Select::make('category')
-                            ->label('Category')
-                            ->required()
-                            ->options([
-                                'MARKETING' => 'MARKETING',
-                                'UTILITY' => 'UTILITY',
-                            ])
+                    Select::make('category')
+                        ->label('Category')
+                        ->required()
+                        ->options([
+                            'MARKETING' => 'MARKETING',
+                            'UTILITY' => 'UTILITY',
+                        ]),
                 ]),
-        
-                // Grid untuk Content dan Preview
-                Grid::make()
-                ->columns([
-                    'default' => 10, // total kolom grid
-                    'sm' => 10,
-                    'md' => 10,
-                    'lg' => 10,
-                ])
+
+            Grid::make()->columns(['default' => 10])
                 ->schema([
                     Fieldset::make('Content')
                         ->schema([
@@ -92,17 +68,24 @@ class WhatsAppTemplateResource extends Resource
                                         ->label('Header Type')
                                         ->options([
                                             'none' => 'None',
+                                            'text' => 'Text',
                                             'image' => 'Image',
                                         ])
                                         ->default('none')
                                         ->reactive(),
+
+                                    TextInput::make('header.text')
+                                        ->label('Header Text')
+                                        ->placeholder('Masukkan teks header')
+                                        ->visible(fn($get) => $get('header.type') === 'text')
+                                        ->required(fn($get) => $get('header.type') === 'text'),
 
                                     FileUpload::make('header.media_url')
                                         ->label('Header Image')
                                         ->directory('whatsapp-templates/headers')
                                         ->image()
                                         ->visible(fn ($get) => $get('header.type') === 'image')
-                                        ->required(fn ($get) => $get('header.type') === 'image'),
+                                        ->required(fn ($get) => $get('header.type') === 'image')
                                 ]),
                                 Step::make('Body')->schema([
                                     Textarea::make('body.text')
@@ -123,19 +106,10 @@ class WhatsAppTemplateResource extends Resource
                                         ->schema([
                                             Select::make('type')
                                                 ->label('Button Type')
-                                                ->options([
-                                                    'url' => 'URL',
-                                                ])
+                                                ->options(['url' => 'URL'])
                                                 ->required(),
-
-                                            TextInput::make('text')
-                                                ->label('Button Text')
-                                                ->required(),
-
-                                            TextInput::make('url')
-                                                ->label('URL')
-                                                ->url()
-                                                ->required(),
+                                            TextInput::make('text')->label('Button Text')->required(),
+                                            TextInput::make('url')->label('URL')->url()->required(),
                                         ])
                                         ->maxItems(1)
                                         ->default([]),
@@ -143,106 +117,9 @@ class WhatsAppTemplateResource extends Resource
                             ]),
                         ])->columns(1)->columnSpan(7),
 
-                    Fieldset::make('Preview')
-                        ->schema([
-                            
-                        ])
-                        ->columns(1)->columnSpan(3),
+                    Fieldset::make('Preview')->columns(1)->columnSpan(3),
                 ])
-            ]);
-    }
-
-    public static function mutateFormDataBeforeCreate(array $data): array
-    {
-        return self::prepareComponentData($data);
-    }
-
-    public static function mutateFormDataBeforeSave(array $data): array
-    {   
-        return self::prepareComponentData($data);
-    }
-
-    protected static function prepareComponentData(array $data): array
-    {
-        $components = [];
-
-        // HEADER
-        if (!empty($data['header']['type']) && $data['header']['type'] !== 'none') {
-            if ($data['header']['type'] === 'image') {
-                $mediaUrl = !empty($data['header']['media_url']) 
-                    ? storage_path('app/public/' . $data['header']['media_url']) 
-                    : null;
-
-                if (!file_exists($mediaUrl)) {
-                    throw new \Exception("File header image tidak ditemukan: {$mediaUrl}");
-                }
-
-                // Upload media ke WhatsApp
-                $mediaId = app(\App\Services\WhatsAppTemplateService::class)
-                    ->uploadMediaToWhatsApp($mediaUrl, 'image');
-
-                $components[] = [
-                    'type' => 'HEADER',
-                    'format' => 'IMAGE',
-                    'example' => [
-                        'header_handle' => [
-                            $mediaId,
-                        ],
-                    ],
-                ];
-            }
-        }
-
-        // BODY
-        if (!empty($data['body']['text'])) {
-            preg_match_all('/\{\{(\d+)\}\}/', $data['body']['text'], $matches);
-            $parameterCount = count($matches[1]);
-
-            $exampleValues = [];
-            if (!empty($data['body']['example'])) {
-                $exampleValues = array_map('trim', explode(',', $data['body']['example']));
-            }
-
-            $components[] = [
-                'type' => 'BODY',
-                'text' => $data['body']['text'],
-                'example' => [
-                    'body_text' => [array_slice($exampleValues, 0, $parameterCount)],
-                ],
-            ];
-        }
-
-        // FOOTER
-        if (!empty($data['footer']['text'])) {
-            $components[] = [
-                'type' => 'FOOTER',
-                'text' => $data['footer']['text'],
-            ];
-        }
-
-        // BUTTONS
-        if (!empty($data['buttons'])) {
-            $buttons = array_map(function ($button) {
-                return [
-                    'type' => strtoupper($button['type']),
-                    'text' => $button['text'],
-                    'url' => $button['url'],
-                ];
-            }, $data['buttons']);
-
-            $components[] = [
-                'type' => 'BUTTONS',
-                'buttons' => $buttons,
-            ];
-        }
-
-        $data['components'] = $components;
-
-        // Cleanup
-        unset($data['header'], $data['body'], $data['footer'], $data['buttons']);
-
-        
-        return $data;
+        ]);
     }
 
     public static function table(Table $table): Table
@@ -251,18 +128,13 @@ class WhatsAppTemplateResource extends Resource
             ->columns([
                 TextColumn::make('name'),
                 TextColumn::make('category'),
-                // Ganti TextColumn jadi BadgeColumn
                 BadgeColumn::make('status')
-                    ->label('Status')
                     ->colors([
                         'success' => 'APPROVED',
                         'warning' => 'PENDING',
                         'danger'  => 'REJECTED',
                     ]),
                 TextColumn::make('languages'),
-            ])
-            ->filters([
-                //
             ])
             ->actions([
                 Action::make('retry')
@@ -271,17 +143,13 @@ class WhatsAppTemplateResource extends Resource
                     ->color('warning')
                     ->visible(fn ($record) => $record->status === 'FAILED')
                     ->requiresConfirmation()
-                    ->action(function ($record) {
-                        // Panggil service untuk retry
-                        app(WhatsAppTemplateService::class)->pushTemplate($record);
-                    }),
+                    ->action(fn ($record) => app(WhatsAppTemplateService::class)->pushTemplate($record)),
+
                 Action::make('preview')
                     ->label('Preview')
                     ->icon('heroicon-o-eye')
                     ->modalHeading('Preview Template')
-                    ->modalContent(fn ($record) => view('preview-template', [
-                        'components' => $record->components,
-                    ]))
+                    ->modalContent(fn ($record) => view('preview-template', ['components' => $record->components]))
                     ->button(),
             ])
             ->headerActions([
@@ -296,14 +164,14 @@ class WhatsAppTemplateResource extends Resource
                                 ->success()
                                 ->send();
                         } catch (\Throwable $e) {
-                            \Log::error($e);
+                            Log::error($e);
                             \Filament\Notifications\Notification::make()
                                 ->title('Sync failed')
                                 ->body($e->getMessage())
                                 ->danger()
                                 ->send();
                         }
-                    }),                    
+                    }),
             ]);
     }
 
@@ -311,6 +179,7 @@ class WhatsAppTemplateResource extends Resource
     {
         return [
             'index' => Pages\ListWhatsAppTemplates::route('/'),
+            'create' => Pages\CreateWhatsAppTemplate::route('/create'),
         ];
     }
 }

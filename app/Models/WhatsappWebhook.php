@@ -23,6 +23,7 @@ class WhatsappWebhook extends Model
 
     protected $casts = [
         'timestamp' => 'datetime',
+        'payload' => 'array',
     ];
 
     public function broadcast()

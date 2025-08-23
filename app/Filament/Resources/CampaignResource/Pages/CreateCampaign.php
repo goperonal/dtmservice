@@ -10,6 +10,11 @@ use App\Models\Group;
 use App\Models\WhatsAppTemplate;
 use Filament\Actions\Action; // <= WAJIB diimport
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\DB;
+use Filament\Notifications\Notification;
+use App\Jobs\SendBroadcastMessage;
+
 
 class CreateCampaign extends CreateRecord
 {
@@ -18,7 +23,6 @@ class CreateCampaign extends CreateRecord
     protected function afterCreate(): void
     {
         $data = $this->form->getState();
-        Log::info('Campaign form data:', $data);
 
         $mode         = $data['send_mode'] ?? null;
         $recipientIds = (array)($data['recipient_id'] ?? []);
@@ -27,11 +31,11 @@ class CreateCampaign extends CreateRecord
         $recipients = collect();
 
         if ($mode === 'single' && !empty($recipientIds)) {
-            $recipients = Recipient::whereIn('id', $recipientIds)->get();
+            $recipients = \App\Models\Recipient::whereIn('id', $recipientIds)->get();
         }
 
         if ($mode === 'group' && !empty($groupIds)) {
-            $recipients = Group::whereIn('id', $groupIds)
+            $recipients = \App\Models\Group::whereIn('id', $groupIds)
                 ->with('recipients')
                 ->get()
                 ->pluck('recipients')
@@ -53,8 +57,31 @@ class CreateCampaign extends CreateRecord
             'updated_at'            => $now,
         ])->all();
 
-        BroadcastMessage::insert($rows);
+        \App\Models\BroadcastMessage::insert($rows);
+
+        // === ENQUEUE SETELAH COMMIT (aman dari race condition) ===
+        DB::afterCommit(function () {
+            $ids = \App\Models\BroadcastMessage::where('campaign_id', $this->record->id)
+                ->where('status', 'pending')
+                ->pluck('id');
+
+            if ($ids->isEmpty()) return;
+
+            $jobs = $ids->map(fn ($id) => new SendBroadcastMessage($id))->all();
+
+            $batch = Bus::batch($jobs)
+                ->name('campaign-'.$this->record->id)
+                ->onQueue('broadcasts')
+                ->dispatch(); // atau ->dispatchAfterResponse()
+
+            Notification::make()
+                ->title('Campaign dibuat')
+                ->body($ids->count().' broadcast diantrikan (Batch: '.$batch->id.').')
+                ->success()
+                ->send();
+        });
     }
+
 
     protected function getFormActions(): array
     {
@@ -80,8 +107,8 @@ class CreateCampaign extends CreateRecord
                     }
 
                     $pricePerRecipient = match ($category) {
-                        'Marketing' => config('services.whatsapp_prices.marketing', 586.33),
-                        'Utility'   => config('services.whatsapp_prices.utility', 356.65),
+                        'MARKETING' => config('services.whatsapp_prices.marketing', 586.33),
+                        'UTILITY'   => config('services.whatsapp_prices.utility', 356.65),
                         default     => config('services.whatsapp_prices.authentication', 356.65),
                     };
                     $total = $recipients * $pricePerRecipient;
