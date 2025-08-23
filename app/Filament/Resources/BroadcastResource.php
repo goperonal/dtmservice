@@ -79,20 +79,32 @@ class BroadcastResource extends Resource
                             ->orderByDesc('created_at')
                             ->get()
                             ->map(function ($log) {
-                                $payload = json_decode($log->payload, true);
+                                // Normalisasi payload: terima array atau string JSON
+                                $payload = $log->payload;
+                                if (is_string($payload)) {
+                                    $decoded = json_decode($payload, true);
+                                    $payload = is_array($decoded) ? $decoded : [];
+                                } elseif (! is_array($payload)) {
+                                    $payload = [];
+                                }
+
+                                $ts = data_get($payload, 'timestamp');
+                                $timestamp = is_numeric($ts) ? date('Y-m-d H:i:s', (int) $ts) : null;
+
                                 return [
-                                    'status'       => $payload['status'] ?? '-',
-                                    'timestamp'    => isset($payload['timestamp'])
-                                        ? date('Y-m-d H:i:s', (int) $payload['timestamp'])
-                                        : null,
-                                    'recipient_id' => $payload['recipient_id'] ?? '-',
+                                    'status'       => data_get($payload, 'status', '-'),
+                                    'timestamp'    => $timestamp,
+                                    'recipient_id' => data_get($payload, 'recipient_id', '-'),
+                                    // (opsional) ringkas pesan error
+                                    'message'      => data_get($payload, 'errors.0.message')
+                                                    ?? data_get($payload, 'errors.0.error_data.details')
+                                                    ?? data_get($payload, 'message')
+                                                    ?? null,
                                     'raw'          => json_encode($payload, JSON_PRETTY_PRINT),
                                 ];
                             });
 
-                        return view('filament.custom.broadcast-logs', [
-                            'logs' => $logs,
-                        ]);
+                        return view('filament.custom.broadcast-logs', compact('logs'));
                     }),
             ])
             ->bulkActions([
