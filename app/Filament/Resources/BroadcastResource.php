@@ -75,34 +75,25 @@ class BroadcastResource extends Resource
                     ->modalHeading('Broadcast Webhook Logs')
                     ->modalButton('Close')
                     ->modalContent(function ($record) {
-                        $logs = \App\Models\WhatsappWebhook::where('broadcast_id', $record->id)
-                            ->orderByDesc('created_at')
-                            ->get()
-                            ->map(function ($log) {
-                                // Normalisasi payload: terima array atau string JSON
-                                $payload = $log->payload;
-                                if (is_string($payload)) {
-                                    $decoded = json_decode($payload, true);
-                                    $payload = is_array($decoded) ? $decoded : [];
-                                } elseif (! is_array($payload)) {
-                                    $payload = [];
-                                }
+                        $query = \App\Models\WhatsappWebhook::query();
 
-                                $ts = data_get($payload, 'timestamp');
-                                $timestamp = is_numeric($ts) ? date('Y-m-d H:i:s', (int) $ts) : null;
+                        if ($record->wamid) {
+                            // Prioritaskan mencocokkan WAMID dari payload JSON
+                            $query->whereRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.id')) = ?", [$record->wamid]);
+                        } else {
+                            // fallback ke broadcast_id
+                            $query->where('broadcast_id', $record->id);
+                        }
 
-                                return [
-                                    'status'       => data_get($payload, 'status', '-'),
-                                    'timestamp'    => $timestamp,
-                                    'recipient_id' => data_get($payload, 'recipient_id', '-'),
-                                    // (opsional) ringkas pesan error
-                                    'message'      => data_get($payload, 'errors.0.message')
-                                                    ?? data_get($payload, 'errors.0.error_data.details')
-                                                    ?? data_get($payload, 'message')
-                                                    ?? null,
-                                    'raw'          => json_encode($payload, JSON_PRETTY_PRINT),
-                                ];
-                            });
+                        $logs = $query->orderByDesc('id')->get()->map(function ($log) {
+                            $payload = is_array($log->payload) ? $log->payload : (json_decode($log->payload, true) ?: []);
+                            return [
+                                'status'       => data_get($payload, 'status', '-'),
+                                'timestamp'    => ($t = data_get($payload, 'timestamp')) ? date('Y-m-d H:i:s', (int) $t) : null,
+                                'recipient_id' => data_get($payload, 'recipient_id', '-'),
+                                'raw'          => json_encode($payload, JSON_PRETTY_PRINT),
+                            ];
+                        });
 
                         return view('filament.custom.broadcast-logs', compact('logs'));
                     }),
