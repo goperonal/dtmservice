@@ -91,7 +91,8 @@ class CampaignResource extends Resource
             })
             ->filters([])
             ->actions([])
-            ->bulkActions([]);
+            ->bulkActions([])
+            ->defaultSort('id', 'desc');
     }
 
     public static function getRelations(): array
