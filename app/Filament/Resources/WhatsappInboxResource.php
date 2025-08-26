@@ -20,33 +20,42 @@ class WhatsappInboxResource extends Resource
 
     public static function table(Table $table): Table
     {
-        return $table
-            ->query(function () {
-                $biz = config('services.whatsapp.business_number');
+        $biz = (string) config('services.whatsapp.business_phone');
 
-                // Subquery: ambil last_id per contact
-                $threads = DB::table('whatsapp_webhooks as w')
-                    ->selectRaw(
-                        "CASE WHEN w.from_number = ? THEN w.to_number ELSE w.from_number END AS contact_phone",
-                        [$biz]
-                    )
-                    ->selectRaw("MAX(w.id) AS last_id")
-                    ->where('w.event_type', 'message')
-                    ->groupBy('contact_phone');
-
-                // Kembalikan Eloquent\Builder dan pastikan ID ikut terpilih
-                return WhatsappWebhook::query()
-                    ->fromSub($threads, 't')
-                    ->join('whatsapp_webhooks as m', 'm.id', '=', 't.last_id')
-                    ->leftJoin('recipients as r', 'r.phone', '=', 't.contact_phone')
-                    ->select([
-                        DB::raw('m.*'), // ⬅️ ini memastikan ada kolom id untuk baris
-                        DB::raw('t.contact_phone as contact_phone'),
-                        DB::raw('m.timestamp as last_at'),
-                        DB::raw('COALESCE(r.name, t.contact_phone) as display_name'),
-                    ])
-                    ->orderByDesc('last_at');
+        // Subquery: daftar thread per kontak (hanya pesan yang melibatkan nomor bisnis)
+        $threads = DB::table('whatsapp_webhooks as w')
+            ->where('w.event_type', 'message')
+            ->where(function ($q) use ($biz) {
+                $q->where('w.from_number', $biz)
+                ->orWhere('w.to_number', $biz);
             })
+            ->selectRaw(
+                "CASE WHEN w.from_number = ? THEN w.to_number ELSE w.from_number END AS contact_phone",
+                [$biz]
+            )
+            ->selectRaw("MAX(w.timestamp) AS last_at")
+            ->selectRaw("MAX(w.id) AS last_id")
+            ->groupBy('contact_phone')
+            ->having('contact_phone', '<>', $biz);
+
+        // Eloquent builder: joinSub($threads) ke tabel whatsapp_webhooks
+        $eloquent = WhatsappWebhook::query()
+            ->joinSub($threads, 't', function ($join) {
+                // baris whatsapp_webhooks = pesan terakhir (last_id)
+                $join->on('whatsapp_webhooks.id', '=', 't.last_id');
+            })
+            ->leftJoin('recipients as r', 'r.phone', '=', 't.contact_phone')
+            ->select([
+                'whatsapp_webhooks.*',               // semua kolom, termasuk id
+                't.contact_phone',
+                't.last_at',
+                DB::raw('COALESCE(r.name, t.contact_phone) as display_name'),
+            ])
+            ->orderByDesc('t.last_at');
+
+        return $table
+            // ⬇️ Pastikan kirim Eloquent\Builder (pakai Closure)
+            ->query(fn () => $eloquent)
             ->columns([
                 TextColumn::make('display_name')
                     ->label('Contact')
@@ -55,15 +64,16 @@ class WhatsappInboxResource extends Resource
                 TextColumn::make('last_message')
                     ->label('Last message')
                     ->getStateUsing(function ($record) {
+                        // $record adalah instance WhatsappWebhook dengan kolom extra
                         $p = $record->payload;
                         $a = is_array($p)
                             ? $p
-                            : (json_decode($p, true)
-                                ?: json_decode(stripslashes((string) $p), true)
-                                ?: []);
+                            : (json_decode($p, true) ?: json_decode(stripslashes((string) $p), true) ?: []);
+
                         return $a['text']['body']
-                            ?? ($a['image']['caption']
-                                ?? ($a['document']['caption'] ?? '—'));
+                            ?? $a['image']['caption']
+                            ?? $a['document']['caption']
+                            ?? '—';
                     })
                     ->limit(60),
 
