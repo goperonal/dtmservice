@@ -52,6 +52,7 @@ class WhatsAppTemplateResource extends Resource
                         ->helperText('Gunakan huruf kecil tanpa spasi, misalnya: promo_juli_2025')
                         ->live(onBlur: true)
                         ->afterStateUpdated(fn ($state, $set) => $set('name', str_replace(' ', '_', strtolower((string) $state)))),
+
                     Select::make('category')
                         ->label('Category')
                         ->required()
@@ -59,7 +60,6 @@ class WhatsAppTemplateResource extends Resource
                         ->options([
                             'MARKETING' => 'MARKETING',
                             'UTILITY'   => 'UTILITY',
-                            // kalau perlu tambah:
                             // 'AUTHENTICATION' => 'AUTHENTICATION',
                         ]),
 
@@ -68,132 +68,116 @@ class WhatsAppTemplateResource extends Resource
                     Hidden::make('status')->default('PENDING')->required(),
                 ]),
 
+            // === Susun Content (kiri) & Preview (kanan) ===
             Grid::make()->columns([
-                'sm' => 1,
-                'lg' => 10,
+                'default' => 1,    // mobile: 1 kolom (stack)
+                'lg'      => 12,   // desktop: 12 kolom
             ])->schema([
+
+                // ===== KIRI: CONTENT (8/12) =====
                 Fieldset::make('Content')
                     ->schema([
-                        Wizard::make([
-                            Step::make('Header')->schema([
-                                Select::make('header.type')
-                                    ->label('Header Type')
-                                    ->options([
-                                        'none'  => 'None',
-                                        'text'  => 'Text',
-                                        'image' => 'Image',
-                                    ])
-                                    ->default('none')
-                                    ->live(),
+                        // Header
+                        Select::make('header.type')
+                            ->label('Header Type')
+                            ->options([
+                                'none'  => 'None',
+                                'text'  => 'Text',
+                                'image' => 'Image',
+                            ])
+                            ->default('none')
+                            ->live(),
 
-                                TextInput::make('header.text')
-                                    ->label('Header Text')
-                                    ->placeholder('Masukkan teks header')
-                                    ->visible(fn (Get $get) => $get('header.type') === 'text')
-                                    ->required(fn (Get $get) => $get('header.type') === 'text')
-                                    ->live(debounce: 300),
+                        TextInput::make('header.text')
+                            ->label('Header Text')
+                            ->placeholder('Masukkan teks header')
+                            ->visible(fn (Get $get) => $get('header.type') === 'text')
+                            ->required(fn (Get $get) => $get('header.type') === 'text')
+                            ->live(debounce: 300),
 
-                                // URL sementara untuk preview (tidak disimpan ke DB)
-                                Hidden::make('header.media_preview_url')
-                                    ->dehydrated(false),
+                        Hidden::make('header.media_preview_url')->dehydrated(false),
 
-                                FileUpload::make('header.media_url')
-                                    ->label('Header Image')
-                                    ->disk('public')
-                                    ->directory('whatsapp-templates/headers')
-                                    ->image()
-                                    ->multiple(false)
-                                    ->live()
-                                    // simpan file saat submit; JANGAN ubah state manual
-                                    ->saveUploadedFileUsing(function (TemporaryUploadedFile $file) {
-                                        return $file->store('whatsapp-templates/headers', 'public');
-                                    })
-                                    ->visible(fn (Get $get) => $get('header.type') === 'image')
-                                    ->required(fn (Get $get) => $get('header.type') === 'image')
-                                    ->afterStateUpdated(function (mixed $state, Set $set) {
-                                        // saat upload SELESAI, Filament akan mengirim TemporaryUploadedFile
-                                        if ($state instanceof TemporaryUploadedFile) {
-                                            $set('header.media_preview_url', $state->temporaryUrl());
-                                            return;
-                                        }
+                        FileUpload::make('header.media_url')
+                            ->label('Header Image')
+                            ->disk('public')
+                            ->directory('whatsapp-templates/headers')
+                            ->image()
+                            ->multiple(false)
+                            ->live()
+                            ->saveUploadedFileUsing(function (TemporaryUploadedFile $file) {
+                                return $file->store('whatsapp-templates/headers', 'public');
+                            })
+                            ->visible(fn (Get $get) => $get('header.type') === 'image')
+                            ->required(fn (Get $get) => $get('header.type') === 'image')
+                            ->afterStateUpdated(function (mixed $state, Set $set) {
+                                if ($state instanceof TemporaryUploadedFile) {
+                                    $set('header.media_preview_url', $state->temporaryUrl());
+                                    return;
+                                }
+                                if (is_array($state)) {
+                                    return;
+                                }
+                                if (is_string($state)) {
+                                    $url = (str_starts_with($state, 'http://') || str_starts_with($state, 'https://') || str_starts_with($state, '/storage/'))
+                                        ? $state
+                                        : Storage::disk('public')->url($state);
+                                    $set('header.media_preview_url', $url);
+                                }
+                            }),
 
-                                        // beberapa saat state bisa bentuk array (UUID map) → tunggu next tick
-                                        if (is_array($state)) {
-                                            // biarkan; nanti akan dipanggil lagi saat jadi TemporaryUploadedFile
-                                            return;
-                                        }
+                        // Body
+                        Textarea::make('body.text')
+                            ->label('Body Text')
+                            ->required()
+                            ->placeholder('Contoh: Hai {{1}}, pesanan Anda {{2}} sedang dikirim.')
+                            ->rows(10)
+                            ->live(debounce: 300),
 
-                                        // kalau state string (edit mode / sudah tersimpan)
-                                        if (is_string($state)) {
-                                            $url = (str_starts_with($state, 'http://') || str_starts_with($state, 'https://') || str_starts_with($state, '/storage/'))
-                                                ? $state
-                                                : Storage::disk('public')->url($state);
-                                            $set('header.media_preview_url', $url);
-                                        }
-                                    }),
-                            ]),
+                        TextInput::make('body.example')
+                            ->helperText('Comma separated example values')
+                            ->live(debounce: 300),
 
-                            Step::make('Body')->schema([
-                                Textarea::make('body.text')
-                                    ->label('Body Text')
+                        // Footer
+                        TextInput::make('footer.text')
+                            ->label('Footer Text')
+                            ->placeholder('Contoh: Terima kasih telah berbelanja.')
+                            ->live(debounce: 300),
+
+                        // Buttons
+                        Repeater::make('buttons')
+                            ->label('Action Buttons')
+                            ->schema([
+                                Select::make('type')
+                                    ->label('Button Type')
+                                    ->options(['url' => 'URL'])
                                     ->required()
-                                    ->placeholder('Contoh: Hai {{1}}, pesanan Anda {{2}} sedang dikirim.')
-                                    ->live(debounce: 300),
-
-                                TextInput::make('body.example')
-                                    ->helperText('Comma separated example values')
-                                    ->live(debounce: 300),
-                            ]),
-
-                            Step::make('Footer')->schema([
-                                TextInput::make('footer.text')
-                                    ->label('Footer Text')
-                                    ->placeholder('Contoh: Terima kasih telah berbelanja.')
-                                    ->live(debounce: 300),
-                            ]),
-
-                            Step::make('Buttons')->schema([
-                                Repeater::make('buttons')
-                                    ->label('Action Buttons')
-                                    ->schema([
-                                        Select::make('type')
-                                            ->label('Button Type')
-                                            ->options(['url' => 'URL'])
-                                            ->required()
-                                            ->live(),
-                                        TextInput::make('text')
-                                            ->label('Button Text')
-                                            ->required()
-                                            ->live(debounce: 300),
-                                        TextInput::make('url')
-                                            ->label('URL')
-                                            ->url()
-                                            ->required()
-                                            ->live(debounce: 300),
-                                    ])
-                                    ->maxItems(1)
-                                    ->default([])
                                     ->live(),
-                            ]),
-                        ])
-                            ->contained(false)
-                            ->extraAttributes(['class' => 'w-full max-w-none']),
+                                TextInput::make('text')
+                                    ->label('Button Text')
+                                    ->required()
+                                    ->live(debounce: 300),
+                                TextInput::make('url')
+                                    ->label('URL')
+                                    ->url()
+                                    ->required()
+                                    ->live(debounce: 300),
+                            ])
+                            ->maxItems(1)
+                            ->default([])
+                            ->live(),
                     ])
                     ->columns(1)
-                    ->columnSpan(['sm' => 1, 'lg' => 6]),
+                    ->columnSpan(['lg' => 8]),
 
+                // ===== KANAN: PREVIEW (4/12) =====
                 Fieldset::make('Preview')
-                    ->columns(1)
-                    ->columnSpan(['sm' => 1, 'lg' => 4])
-                    ->extraAttributes(['class' => 'lg:sticky lg:top-4'])
                     ->schema([
                         View::make('filament.whatsapp-template-preview')
                             ->reactive()
                             ->viewData(function (Get $get) {
-                                // 1) pakai URL preview dulu (temporary)
+                                // gunakan URL preview jika ada
                                 $headerImageUrl = $get('header.media_preview_url');
 
-                                // 2) kalau belum ada, fallback dari media_url tersimpan
                                 if (empty($headerImageUrl)) {
                                     $media = $get('header.media_url');
 
@@ -206,7 +190,6 @@ class WhatsAppTemplateResource extends Resource
                                             ? $media
                                             : Storage::disk('public')->url($media);
                                     } elseif (is_array($media)) {
-                                        // coba ambil kandidat di array
                                         $candidate = data_get($media, 'url')
                                             ?? data_get($media, 'temporaryUrl')
                                             ?? data_get($media, 'path');
@@ -231,7 +214,7 @@ class WhatsAppTemplateResource extends Resource
                                     }
                                 }
 
-                                // Normalisasi buttons → array dan kirim dgn nama unik (tplButtons)
+                                // Normalisasi buttons → array
                                 $buttonsState = $get('buttons');
                                 if (is_array($buttonsState)) {
                                     $tplButtons = $buttonsState;
@@ -254,10 +237,14 @@ class WhatsAppTemplateResource extends Resource
                                     'phoneFrame'     => false,
                                 ];
                             }),
-                    ]),
+                    ])
+                    ->columns(1)
+                    ->extraAttributes(['class' => 'lg:sticky lg:top-4'])
+                    ->columnSpan(['lg' => 4]),
             ]),
         ]);
     }
+
 
     public static function table(Table $table): Table
     {
@@ -359,6 +346,7 @@ class WhatsAppTemplateResource extends Resource
                     ->visible(fn ($record) => $record->status === 'FAILED')
                     ->requiresConfirmation()
                     ->action(fn ($record) => app(\App\Services\WhatsAppTemplateService::class)->pushTemplate($record)),
+                \Filament\Tables\Actions\DeleteAction::make(),
             ])
             ->headerActions([
                 Action::make('Sync Now')
@@ -380,6 +368,9 @@ class WhatsAppTemplateResource extends Resource
                                 ->send();
                         }
                     }),
+            ])
+            ->bulkActions([
+                \Filament\Tables\Actions\DeleteBulkAction::make(),
             ]);
     }
 

@@ -62,7 +62,7 @@ class BroadcastResource extends Resource
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('sent_at')
-                    ->dateTime()
+                    ->dateTime('d M Y H:i', 'Asia/Jakarta')
                     ->label('Sent At')
                     ->sortable()
                     ->toggleable(),

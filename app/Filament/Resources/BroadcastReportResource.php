@@ -116,12 +116,12 @@ class BroadcastReportResource extends Resource
 
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('Dibuat')
-                    ->dateTime('Y-m-d H:i')
+                    ->dateTime('d M Y H:i', 'Asia/Jakarta')
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('latestWebhook.timestamp')
                     ->label('Update Terakhir')
-                    ->dateTime('Y-m-d H:i')
+                    ->dateTime('d M Y H:i', 'Asia/Jakarta')
                     ->sortable()
                     ->toggleable(),
             ])

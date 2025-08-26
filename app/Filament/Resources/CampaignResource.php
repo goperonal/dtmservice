@@ -81,7 +81,7 @@ class CampaignResource extends Resource
                 Tables\Columns\TextColumn::make('whatsappTemplate.name')->label('Template'),
                 Tables\Columns\TextColumn::make('broadcast_messages_count')->label('Recipients'),
                 Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime()
+                    ->dateTime('d M Y H:i', 'Asia/Jakarta')
                     ->sortable(),
             ])
             ->recordUrl(function ($record) {

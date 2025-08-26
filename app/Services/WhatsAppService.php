@@ -83,4 +83,27 @@ class WhatsAppService
         return $response->json();
     }
 
+    public function sendText(string $to, string $body): array
+    {
+        $base    = rtrim(config('services.whatsapp.url'), '/');
+        $token   = config('services.whatsapp.token');
+        $phoneId = config('services.whatsapp.phone_id');
+
+        $payload = [
+            'messaging_product' => 'whatsapp',
+            'to'   => $to,
+            'type' => 'text',
+            'text' => [
+                'preview_url' => true,
+                'body' => $body,
+            ],
+        ];
+
+        $resp = Http::withToken($token)->post("{$base}/{$phoneId}/messages", $payload);
+        if ($resp->failed()) {
+            throw new \Exception('Send text failed: ' . $resp->body());
+        }
+        return $resp->json();
+    }
+
 }
