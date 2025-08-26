@@ -4,135 +4,136 @@ namespace App\Filament\Resources\WhatsappInboxResource\Pages;
 
 use App\Filament\Resources\WhatsappInboxResource;
 use App\Models\WhatsappWebhook;
-use App\Models\Recipient;
 use App\Services\WhatsAppService;
-use Filament\Forms;
-use Filament\Forms\Contracts\HasForms;
-use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Resources\Pages\Page;
-use Illuminate\Contracts\Support\Htmlable;
-use Illuminate\Support\Carbon;
+use Filament\Forms;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Grid;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\Storage;
 
-class ViewConversation extends Page implements HasForms
+class ViewConversation extends Page implements Forms\Contracts\HasForms
 {
-    use InteractsWithForms;
+    use Forms\Concerns\InteractsWithForms;
 
     protected static string $resource = WhatsappInboxResource::class;
-    protected static string $view = 'filament.whatsapp.conversation';
+    protected static string $view = 'filament.whatsapp-chat';
 
-    public ?string $phone = null;        // lawan bicara
-    public string  $businessPhone;       // nomor bisnis
-    public array   $messages = [];       // isi chat
-    public ?string $message = null;      // input balasan
-    public ?string $contactName = null;  // nama recipient (jika ada)
+    public string $phone;
+    public array $messages = [];
 
-    public function mount(?string $phone = null): void
+    public ?string $text = null;
+    public $attachment = null; // Livewire TemporaryUploadedFile
+
+    public function mount(string $phone): void
     {
-        if (empty($phone)) {
-            $this->redirect(WhatsappInboxResource::getUrl('index'));
-            return;
-        }
-
         $this->phone = $phone;
-        $this->businessPhone = (string) config('services.whatsapp.business_phone', '');
-        $this->contactName = \App\Models\Recipient::where('phone', $this->phone)->value('name');
-
         $this->loadMessages();
     }
 
-    public function getHeading(): string|Htmlable
+    public function getTitle(): string
     {
-        return $this->contactName ?: $this->phone;
+        return 'Chat';
     }
 
-    public function getSubheading(): string|Htmlable|null
+    public function getSubheading(): ?string
     {
-        return $this->contactName ? $this->phone : null;
+        return $this->phone;
     }
 
+    /** Form reply */
     protected function getFormSchema(): array
     {
         return [
-            Forms\Components\Textarea::make('message')
-                ->label('Reply')
-                ->rows(2)
-                ->placeholder('Tulis pesan...')
-                ->required()
-                ->maxLength(4096)
-                ->columnSpanFull(),
-            Forms\Components\Actions::make([
-                Forms\Components\Actions\Action::make('send')
-                    ->label('Send')
-                    ->color('primary')
-                    ->action('sendMessage'),
-            ])->alignEnd(),
+            Grid::make()->schema([
+                Textarea::make('text')
+                    ->label('Reply')
+                    ->rows(3)
+                    ->placeholder('Tulis pesan...')
+                    ->maxLength(4096),
+
+                FileUpload::make('attachment')
+                    ->label('Attachment (opsional)')
+                    ->disk('public')
+                    ->directory('wa-outgoing')
+                    ->preserveFilenames()
+                    ->imagePreviewHeight('100')
+                    ->downloadable()
+                    ->openable(),
+            ]),
         ];
     }
 
-    public function sendMessage(WhatsAppService $wa): void
+    public function send(): void
     {
-        $text = trim((string) $this->message);
-        if ($text === '') return;
+        $svc = app(WhatsAppService::class);
+        try {
+            if ($this->attachment) {
+                $path = $this->attachment->store('wa-outgoing', 'public');
+                $abs  = Storage::disk('public')->path($path);
+                $mime = mime_content_type($abs) ?: 'application/octet-stream';
 
-        $resp  = $wa->sendText($this->phone, $text);
-        $wamid = data_get($resp, 'messages.0.id');
+                $mediaId = $svc->uploadMedia($abs, $mime);
 
-        // log outbound supaya tampil di chat
-        WhatsappWebhook::create([
-            'event_type' => 'message',
-            'message_id' => $wamid,
-            'status'     => 'sent',
-            'from_number'=> $this->businessPhone,
-            'to_number'  => $this->phone,
-            'timestamp'  => now('UTC'),
-            'payload'    => [
-                'from'      => $this->businessPhone,
-                'to'        => $this->phone,
-                'timestamp' => (string) time(),
-                'type'      => 'text',
-                'text'      => ['body' => $text],
-            ],
-        ]);
+                // Pilih type by mime
+                $type = str_starts_with($mime, 'image/') ? 'image' : 'document';
+                $svc->sendMedia($this->phone, $mediaId, $type, $this->text ?: null);
+            } elseif (filled($this->text)) {
+                $svc->sendText($this->phone, $this->text);
+            }
 
-        $this->message = null;
-        $this->loadMessages();
-        $this->dispatch('chat-scrolldown');
+            $this->reset(['text', 'attachment']);
+            Notification::make()->title('Terkirim')->success()->send();
+            $this->loadMessages();
+        } catch (\Throwable $e) {
+            Notification::make()->title('Gagal')->body($e->getMessage())->danger()->send();
+        }
     }
 
+    /** Ambil semua pesan 2 arah untuk nomor ini */
     protected function loadMessages(): void
     {
-        $bp = $this->businessPhone;
-        $ph = $this->phone;
+        $biz = app(WhatsAppService::class)->businessNumber();
 
         $rows = WhatsappWebhook::query()
             ->where('event_type', 'message')
-            ->where(function ($q) use ($bp, $ph) {
-                $q->where('from_number', $ph)->where('to_number', $bp);   // inbound
+            ->where(function ($q) use ($biz) {
+                $q->where(function ($qq) { // inbound
+                    $qq->where('from_number', $this->phone)
+                       ->where('to_number',   app(WhatsAppService::class)->businessNumber());
+                })->orWhere(function ($qq) use ($biz) { // outbound
+                    $qq->where('from_number', $biz)
+                       ->where('to_number',   $this->phone);
+                });
             })
-            ->orWhere(function ($q) use ($bp, $ph) {
-                $q->where('from_number', $bp)->where('to_number', $ph);   // outbound
-            })
-            ->orderBy('id', 'asc')
-            ->limit(1000)
+            ->orderBy('timestamp')
             ->get();
 
-        $this->messages = $rows->map(function ($r) use ($bp) {
-            // waktu dari kolom timestamp (sudah cast datetime) atau created_at
-            $dt = $r->timestamp ?: $r->created_at;
-            $time = optional($dt)->timezone('Asia/Jakarta')?->format('d M Y H:i') . ' WIB';
-
-            $p = is_array($r->payload) ? $r->payload : json_decode((string) $r->payload, true);
-            $type = is_array($p) ? ($p['type'] ?? null) : null;
-            $text = is_array($p) ? data_get($p, 'text.body') : null;
+        $this->messages = $rows->map(function (WhatsappWebhook $w) use ($biz) {
+            $p = $w->payload_array;
+            $kind = $p['type'] ?? 'text';
 
             return [
-                'id'   => $r->id,
-                'out'  => $r->from_number === $bp, // kanan bila kita yang kirim
-                'time' => $time,
-                'type' => $type,
-                'text' => $text ?: strtoupper((string)$type ?: '-'),
+                'id'        => $w->id,
+                'at'        => optional($w->timestamp)->format('d M Y H:i:s'),
+                'direction' => $w->isOutbound($biz) ? 'out' : 'in',
+                'text'      => $p['text']['body'] ?? null,
+                'imageId'   => $p['image']['id'] ?? null,
+                'docId'     => $p['document']['id'] ?? null,
+                'caption'   => $p[$kind]['caption'] ?? null,
+                'type'      => $kind,
             ];
-        })->toArray();
+        })->all();
+    }
+
+    protected function getForms(): array
+    {
+        return ['form'];
+    }
+
+    public function submit(): void
+    {
+        $this->send();
     }
 }

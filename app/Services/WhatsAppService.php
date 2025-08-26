@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use App\Models\WhatsappWebhook;
 
 class WhatsAppService
 {
@@ -15,6 +16,7 @@ class WhatsAppService
         $this->token = config('services.whatsapp.token');
         $this->phoneId = config('services.whatsapp.phone_id');
         $this->url = config('services.whatsapp.url');
+        $this->businessNumber = config('services.whatsapp.business_phone');
     }
 
     public function sendWhatsAppTemplate($recipientNumber, $template)
@@ -85,25 +87,90 @@ class WhatsAppService
 
     public function sendText(string $to, string $body): array
     {
-        $base    = rtrim(config('services.whatsapp.url'), '/');
-        $token   = config('services.whatsapp.token');
-        $phoneId = config('services.whatsapp.phone_id');
-
+        $url = "{$this->url}/{$this->phoneId}/messages";
         $payload = [
             'messaging_product' => 'whatsapp',
             'to'   => $to,
             'type' => 'text',
-            'text' => [
-                'preview_url' => true,
-                'body' => $body,
-            ],
+            'text' => ['body' => $body],
         ];
 
-        $resp = Http::withToken($token)->post("{$base}/{$phoneId}/messages", $payload);
-        if ($resp->failed()) {
-            throw new \Exception('Send text failed: ' . $resp->body());
-        }
-        return $resp->json();
+        $res = Http::withToken($this->token)->post($url, $payload);
+        $res->throw();
+
+        $resp = $res->json();
+
+        // catat ke webhooks (outbound echo)
+        WhatsappWebhook::create([
+            'event_type' => 'message',
+            'message_id' => data_get($resp, 'messages.0.id'),
+            'status'     => 'sent',
+            'from_number'=> $this->businessNumber,
+            'to_number'  => $to,
+            'timestamp'  => now(),
+            'payload'    => json_encode(['from' => $this->businessNumber, 'to' => $to, 'type'=>'text', 'text'=>['body'=>$body]]),
+        ]);
+
+        return $resp;
+    }
+    /** Upload file ke WA Cloud API -> return media id */
+    public function uploadMedia(string $localPath, string $mime): string
+    {
+        $url = "{$this->url}/{$this->phoneId}/media";
+
+        $res = Http::asMultipart()
+            ->withToken($this->token)
+            ->post($url, [
+                ['name' => 'messaging_product', 'contents' => 'whatsapp'],
+                ['name' => 'type',              'contents' => $mime],
+                ['name' => 'file',              'contents' => fopen($localPath, 'r'), 'filename' => basename($localPath)],
+            ]);
+
+        $res->throw();
+        return (string) data_get($res->json(), 'id');
+    }
+
+    /** Kirim image/doc by media id */
+    public function sendMedia(string $to, string $mediaId, string $type = 'image', ?string $caption = null): array
+    {
+        $url = "{$this->url}/{$this->phoneId}/messages";
+
+        $mediaKey = $type; // 'image' atau 'document'
+        $payload  = [
+            'messaging_product' => 'whatsapp',
+            'to'   => $to,
+            'type' => $type,
+            $mediaKey => array_filter([
+                'id'      => $mediaId,
+                'caption' => $caption,
+            ]),
+        ];
+
+        $res = Http::withToken($this->token)->post($url, $payload);
+        $res->throw();
+
+        $resp = $res->json();
+
+        // echo ke webhooks table
+        WhatsappWebhook::create([
+            'event_type' => 'message',
+            'message_id' => data_get($resp, 'messages.0.id'),
+            'status'     => 'sent',
+            'from_number'=> $this->businessNumber,
+            'to_number'  => $to,
+            'timestamp'  => now(),
+            'payload'    => json_encode([
+                'from' => $this->businessNumber, 'to'=>$to,
+                'type' => $type, $type => ['id'=>$mediaId, 'caption'=>$caption]
+            ]),
+        ]);
+
+        return $resp;
+    }
+
+    public function businessNumber(): string
+    {
+        return $this->businessNumber;
     }
 
 }

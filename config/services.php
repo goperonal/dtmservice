@@ -42,7 +42,7 @@ return [
         'business_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
         'apps_id' => env('WHATSAPP_APPS_ID'),
         'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
-        'business_phone' => env('WHATSAPP_BUSINESS_PHONE', '628176696633'),
+        'business_phone' => env('WHATSAPP_BUSINESS_PHONE'),
     ],
     'whatsapp_prices' => [
         'marketing' => env('WHATSAPP_PRICE_MARKETING', 586.33),
