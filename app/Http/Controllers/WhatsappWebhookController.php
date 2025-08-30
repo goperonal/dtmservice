@@ -44,49 +44,56 @@ class WhatsappWebhookController extends Controller
             foreach ($entry['changes'] ?? [] as $change) {
                 $value = $change['value'] ?? [];
 
-                // STATUS UPDATE
+                // ===== STATUS UPDATE =====
                 if (!empty($value['statuses'])) {
                     foreach ($value['statuses'] as $status) {
                         $wamid = $status['id'] ?? null;
-
-                        // Cari broadcast berdasarkan wamid
                         $broadcast = BroadcastMessage::where('wamid', $wamid)->first();
 
-                        // Simpan webhook
                         WhatsappWebhook::create([
                             'broadcast_id' => $broadcast->id ?? null,
-                            'event_type' => 'status',
-                            'message_id' => $wamid,
-                            'status' => $status['status'] ?? null,
-                            'to_number' => $status['recipient_id'] ?? null,
-                            'conversation_id' => $status['conversation']['id'] ?? null,
-                            'conversation_category' => $status['pricing']['category'] ?? null,
-                            'pricing_model' => $status['pricing']['pricing_model'] ?? null,
-                            'timestamp' => isset($status['timestamp']) ? Carbon::createFromTimestamp($status['timestamp']) : null,
-                            'payload' => json_encode($status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                            'event_type'   => 'status',
+                            'message_id'   => $wamid,
+                            'status'       => $status['status'] ?? null,
+                            'to_number'    => $status['recipient_id'] ?? null,
+                            'conversation_id'        => data_get($status, 'conversation.id'),
+                            'conversation_category'  => data_get($status, 'pricing.category'),
+                            'pricing_model'          => data_get($status, 'pricing.pricing_model'),
+                            'timestamp'    => isset($status['timestamp']) ? \Carbon\Carbon::createFromTimestamp($status['timestamp']) : null,
+                            'payload'      => json_encode($status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
                         ]);
 
-                        // Update status di broadcast jika ada
                         if ($broadcast) {
-                            $broadcast->update([
-                                'status' => $status['status']
-                            ]);
+                            $broadcast->update(['status' => ($status['status'] ?? $broadcast->status)]);
                         }
                     }
                 }
 
-                // PESAN MASUK (jika ada)
+                // ===== PESAN MASUK =====
                 if (!empty($value['messages'])) {
                     foreach ($value['messages'] as $msg) {
-                        WhatsappWebhook::create([
-                            'event_type' => 'message',
-                            'message_id' => $msg['id'] ?? null,
-                            'status' => null,
+                        $type = $msg['type'] ?? 'text';
+
+                        $mediaId = data_get($msg, "{$type}.id");
+                        $mime    = data_get($msg, "{$type}.mime_type");
+
+                        $row = WhatsappWebhook::create([
+                            'event_type'  => 'message',
+                            'message_id'  => $msg['id'] ?? null,
+                            'message_type'=> $type,
+                            'status'      => null,
                             'from_number' => $msg['from'] ?? null,
-                            'to_number' => $value['metadata']['display_phone_number'] ?? null,
-                            'timestamp' => isset($msg['timestamp']) ? Carbon::createFromTimestamp($msg['timestamp']) : null,
-                            'payload' => json_encode($msg, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+                            'to_number'   => $value['metadata']['display_phone_number'] ?? null,
+                            'timestamp'   => isset($msg['timestamp']) ? \Carbon\Carbon::createFromTimestamp($msg['timestamp']) : null,
+                            'payload'     => json_encode($msg, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE),
+                            'media_id'    => $mediaId,
+                            'media_mime'  => $mime,
                         ]);
+
+                        // Kalau ada media → queue fetch sekali
+                        if ($mediaId) {
+                            \App\Jobs\FetchWhatsappMedia::dispatch($row->id)->onQueue('default');
+                        }
                     }
                 }
             }
@@ -94,4 +101,6 @@ class WhatsappWebhookController extends Controller
 
         return response()->json(['status' => 'ok']);
     }
+
+
 }

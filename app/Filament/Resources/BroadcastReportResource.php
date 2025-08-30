@@ -130,7 +130,7 @@ class BroadcastReportResource extends Resource
                     ->label('Campaign')
                     ->relationship('campaign', 'name'),
 
-                SelectFilter::make('whatsapp_template_id')
+                SelectFilter::make('whatsapp_template_name')
                     ->label('Template')
                     ->relationship('template', 'name'),
 

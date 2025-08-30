@@ -7,6 +7,8 @@ use Filament\Resources\Pages\CreateRecord;
 use Filament\Notifications\Notification;
 use App\Services\WhatsAppTemplateService;
 use Illuminate\Support\Facades\Storage;
+use Filament\Actions;
+
 
 class CreateWhatsAppTemplate extends CreateRecord
 {
@@ -15,6 +17,21 @@ class CreateWhatsAppTemplate extends CreateRecord
     protected function getRedirectUrl(): string
     {
         return $this->getResource()::getUrl('index');
+    }
+
+     // Hilangkan "Create & create another"
+    protected function getFormActions(): array
+    {
+        return [
+            Actions\CreateAction::make()
+                ->label('Create')
+                ->createAnother(false),   // <-- ini yang mematikan tombol kedua
+            // Tombol Cancel pakai generic Action
+            Actions\Action::make('cancel')
+                ->label('Cancel')
+                ->url($this->getResource()::getUrl('index'))   // kembali ke list
+                ->color('gray'),
+        ];
     }
 
     protected function mutateFormDataBeforeCreate(array $data): array

@@ -8,5 +8,9 @@ use Filament\Resources\Pages\ListRecords;
 class ListThreads extends ListRecords
 {
     protected static string $resource = WhatsappInboxResource::class;
-    protected function getHeaderWidgets(): array { return []; }
+
+    protected function getHeaderActions(): array
+    {
+        return [];
+    }
 }

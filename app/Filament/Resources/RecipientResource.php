@@ -18,12 +18,13 @@ use Maatwebsite\Excel\Facades\Excel;
 use App\Services\RecipientsImport;
 use Filament\Tables\Filters\SelectFilter;
 use Illuminate\Support\Facades\Storage;
+use Filament\Tables\Columns\TextColumn;
 
 class RecipientResource extends Resource
 {
     protected static ?string $model = Recipient::class;
-    protected static ?string $navigationIcon = 'heroicon-o-phone';
-    protected static ?string $navigationGroup = 'WhatsApp Service';
+    protected static ?string $navigationIcon = 'heroicon-o-identification';
+    protected static ?string $navigationGroup = 'WhatsApp Services';
     protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
@@ -68,10 +69,9 @@ class RecipientResource extends Resource
                 Tables\Columns\TextColumn::make('name')->sortable()->searchable(),
                 Tables\Columns\TextColumn::make('phone')->sortable()->searchable(),
 
-                Tables\Columns\TextColumn::make('groups.name')
+                TextColumn::make('groups.name')
                     ->label('Groups')
                     ->badge()
-                    ->sortable()
                     ->searchable(),
 
                 Tables\Columns\TextColumn::make('notes')

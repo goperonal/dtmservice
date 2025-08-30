@@ -34,8 +34,8 @@ use Filament\Support\Enums\Alignment;
 class WhatsAppTemplateResource extends Resource
 {
     protected static ?string $model = WhatsAppTemplate::class;
-    protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
-    protected static ?string $navigationGroup = 'WhatsApp Service';
+    protected static ?string $navigationIcon = 'heroicon-o-clipboard-document-list';
+    protected static ?string $navigationGroup = 'WhatsApp Services';
     protected static ?string $navigationLabel = 'Templates';
     protected static ?string $modelLabel = 'WhatsApp Template';
     protected static ?int $navigationSort = 2;
@@ -129,7 +129,7 @@ class WhatsAppTemplateResource extends Resource
                         Textarea::make('body.text')
                             ->label('Body Text')
                             ->required()
-                            ->placeholder('Contoh: Hai {{1}}, pesanan Anda {{2}} sedang dikirim.')
+                            ->placeholder('Contoh: Hai {{1}}, pesanan Anda {{2}} sedang dikirim. Akan menggunakan variable number.')
                             ->rows(10)
                             ->live(debounce: 300),
 
@@ -143,15 +143,15 @@ class WhatsAppTemplateResource extends Resource
                             ->placeholder('Contoh: Terima kasih telah berbelanja.')
                             ->live(debounce: 300),
 
-                        // Buttons
-                        Repeater::make('buttons')
-                            ->label('Action Buttons')
+                        Fieldset::make('Action Button')
+                            ->statePath('buttons.0') // map ke buttons[0]{...}
                             ->schema([
                                 Select::make('type')
                                     ->label('Button Type')
                                     ->options(['url' => 'URL'])
+                                    ->default('url')
                                     ->required()
-                                    ->live(),
+                                    ->disabled(), // tetap tampil tapi tidak bisa diubah
                                 TextInput::make('text')
                                     ->label('Button Text')
                                     ->required()
@@ -162,9 +162,7 @@ class WhatsAppTemplateResource extends Resource
                                     ->required()
                                     ->live(debounce: 300),
                             ])
-                            ->maxItems(1)
-                            ->default([])
-                            ->live(),
+                            ->columns(3)
                     ])
                     ->columns(1)
                     ->columnSpan(['lg' => 8]),
@@ -251,12 +249,16 @@ class WhatsAppTemplateResource extends Resource
         return $table
             ->columns([
                 TextColumn::make('name'),
-                TextColumn::make('category'),
-                BadgeColumn::make('status')->colors([
-                    'success' => 'APPROVED',
-                    'warning' => 'PENDING',
-                    'danger'  => 'REJECTED',
-                ]),
+                TextColumn::make('category')
+                    ->sortable()
+                    ->searchable(),
+                BadgeColumn::make('status')
+                    ->colors([
+                        'success' => 'APPROVED',
+                        'warning' => 'PENDING',
+                        'danger'  => 'REJECTED',
+                    ])
+                    ->sortable(),
                 TextColumn::make('languages'),
             ])
             ->actions([

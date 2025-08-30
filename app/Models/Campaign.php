@@ -11,18 +11,40 @@ class Campaign extends Model
 {
     protected $fillable = [
         'name',
+        // id bisa tetap ada, tapi tidak wajib dipakai:
         'whatsapp_template_id',
+
+        // — baru:
+        'whatsapp_template_name',
+        'template_name',
+        'template_language',
+        'variable_bindings',
+        'template_components',
     ];
 
+    protected $casts = [
+        'variable_bindings'   => 'array',
+        'template_components' => 'array',
+    ];
+
+    // Relasi lama (by id) — opsional tetap ada
     public function whatsappTemplate()
     {
         return $this->belongsTo(WhatsAppTemplate::class, 'whatsapp_template_id');
     }
 
-    public function recipients()
+    // Relasi alternatif by name (kunci owner = name)
+    public function whatsappTemplateByName()
     {
-        return $this->belongsToMany(Recipient::class, 'campaign_recipient', 'campaign_id', 'recipient_id')
-            ->withTimestamps();
+        return $this->belongsTo(WhatsAppTemplate::class, 'whatsapp_template_name', 'name');
+    }
+
+    // Untuk tampilan tabel (fallback ke snapshot)
+    public function getTemplateDisplayAttribute(): ?string
+    {
+        return $this->whatsappTemplateByName?->name
+            ?? $this->template_name
+            ?? $this->whatsapp_template_name;
     }
 
     public function broadcastMessages()
