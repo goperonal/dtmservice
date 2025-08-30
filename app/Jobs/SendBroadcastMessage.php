@@ -53,8 +53,12 @@ class SendBroadcastMessage implements ShouldQueue
         try {
             $to        = $bm->recipient?->phone;
             $campaign  = $bm->campaign;
-            $tmplName  = (string) ($campaign->template_name ?? '');
+
+            // ⬅️ Ambil template name dari campaign ATAU dari kolom broadcast
+            $tmplName  = trim((string) ($campaign->template_name ?? $bm->whatsapp_template_name ?? ''));
             $lang      = (string) ($campaign->template_language ?? 'id');
+
+            // Binding variabel (boleh kosong; kita tetap coba kirim template jika ada tmplName)
             $bindings  = is_array($campaign->variable_bindings ?? null) ? $campaign->variable_bindings : [];
 
             if (empty($to)) {
@@ -65,10 +69,40 @@ class SendBroadcastMessage implements ShouldQueue
                 return;
             }
 
-            if ($tmplName !== '' && !empty($bindings)) {
-                $components = CampaignResource::buildWaBodyComponentsFromBindings($bindings, $bm->recipient);
+            // ===== 24-hour window guard =====
+            // kalau last inbound > 24 jam dan TIDAK ada template_name -> jangan kirim text
+            $lastInbound = \App\Models\WhatsappWebhook::inbound()
+                ->where('from_number', $to)
+                ->orderByDesc('timestamp')
+                ->first();
 
-                Log::info('WA Template Payload', [
+            $outside24h = !$lastInbound || now()->diffInHours(optional($lastInbound->timestamp)->copy() ?? now()->subYears(10)) > 24;
+
+            if ($outside24h && $tmplName === '') {
+                // Jangan fallback ke teks — tandai perlu template
+                $bm->update([
+                    'status'           => 'failed',
+                    'response_payload' => [
+                        'error'           => 'Outside 24h window – must send template',
+                        'error_code'      => 131047,
+                        'needs_template'  => true,
+                    ],
+                ]);
+
+                \Log::warning('Broadcast blocked by 24h window (no template)', [
+                    'bm_id' => $bm->id, 'to' => $to,
+                ]);
+                return;
+            }
+
+            // ===== Kirim =====
+            if ($tmplName !== '') {
+                // Rakitan komponen dari bindings (jika ada). Biarkan kosong jika tidak ada parameter.
+                $components = \App\Filament\Resources\CampaignResource::buildWaBodyComponentsFromBindings(
+                    $bindings, $bm->recipient
+                );
+
+                \Log::info('WA Template Payload (broadcast)', [
                     'broadcast_id' => $bm->id,
                     'to'           => $to,
                     'template'     => $tmplName,
@@ -83,16 +117,17 @@ class SendBroadcastMessage implements ShouldQueue
                     lang: $lang
                 );
             } else {
+                // Hanya masuk ke sini jika masih dalam 24 jam
                 $body = (string) ($bm->body ?? '');
                 if ($body === '') {
                     $bm->update([
                         'status'           => 'failed',
-                        'response_payload' => ['error' => 'Template/bindings kosong dan tidak ada body fallback'],
+                        'response_payload' => ['error' => 'Body text kosong & tidak ada template'],
                     ]);
                     return;
                 }
 
-                Log::info('WA Text Payload (fallback)', [
+                \Log::info('WA Text Payload (broadcast)', [
                     'broadcast_id' => $bm->id,
                     'to'           => $to,
                     'body'         => $body,
@@ -101,6 +136,7 @@ class SendBroadcastMessage implements ShouldQueue
                 $response = $whatsapp->sendText($to, $body);
             }
 
+            // ===== Handle response =====
             if (isset($response['error'])) {
                 $bm->update([
                     'status'           => 'failed',
@@ -122,11 +158,12 @@ class SendBroadcastMessage implements ShouldQueue
                 'response_payload' => ['error' => $e->getMessage()],
             ]);
 
-            Log::warning('SendBroadcastMessage failed: '.$e->getMessage(), [
+            \Log::warning('SendBroadcastMessage failed: '.$e->getMessage(), [
                 'bm_id' => $bm->id ?? null,
             ]);
 
             throw $e;
         }
     }
+
 }
