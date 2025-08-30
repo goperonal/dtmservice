@@ -9,27 +9,33 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // 0) Pastikan engine InnoDB (FK butuh InnoDB)
-        DB::statement("SET SESSION sql_require_primary_key = 0");
+        // 0) (Opsional) Selaraskan tipe kolom agar match ke whatsapp_templates.id (bigint unsigned nullable)
+        Schema::table('broadcasts', function (Blueprint $table) {
+            try {
+                $table->unsignedBigInteger('whatsapp_template_id')->nullable()->change();
+            } catch (\Throwable $e) {
+                // abaikan jika driver tidak support change() atau sudah sesuai
+            }
+        });
 
-        // 1) Drop FK lama (kalau ada)
+        Schema::table('campaigns', function (Blueprint $table) {
+            try {
+                $table->unsignedBigInteger('whatsapp_template_id')->nullable()->change();
+            } catch (\Throwable $e) {}
+        });
+
+        // 1) Drop semua FK lama untuk kolom terkait (aman bila tidak ada)
         $this->dropFkIfExists('broadcasts', 'whatsapp_template_id');
         $this->dropFkIfExists('campaigns',  'whatsapp_template_id');
 
-        // 2) Samakan tipe kolom: BIGINT UNSIGNED NULL
-        //    (gunakan ALTER TABLE supaya tidak perlu doctrine/dbal)
-        DB::statement('ALTER TABLE `broadcasts` 
-            MODIFY `whatsapp_template_id` BIGINT UNSIGNED NULL');
-        DB::statement('ALTER TABLE `campaigns` 
-            MODIFY `whatsapp_template_id` BIGINT UNSIGNED NULL');
-
-        // 3) Bersihkan orphan
+        // 2) Bersihkan orphan rows sebelum pasang FK baru
         DB::statement('
             UPDATE broadcasts b
             LEFT JOIN whatsapp_templates w ON w.id = b.whatsapp_template_id
             SET b.whatsapp_template_id = NULL
             WHERE b.whatsapp_template_id IS NOT NULL AND w.id IS NULL
         ');
+
         DB::statement('
             UPDATE campaigns c
             LEFT JOIN whatsapp_templates w ON w.id = c.whatsapp_template_id
@@ -37,50 +43,45 @@ return new class extends Migration
             WHERE c.whatsapp_template_id IS NOT NULL AND w.id IS NULL
         ');
 
-        // 4) Tambah index & FK baru: ON DELETE SET NULL
+        // 3) Tambah index & pasang FK baru: ON DELETE SET NULL
         Schema::table('broadcasts', function (Blueprint $table) {
-            try { $table->index('whatsapp_template_id', 'broadcasts_template_idx'); } catch (\Throwable $e) {}
-            $table->foreign('whatsapp_template_id', 'broadcasts_template_fk')
+            try { $table->index('whatsapp_template_id'); } catch (\Throwable $e) {}
+            $table->foreign('whatsapp_template_id', 'broadcasts_whatsapp_template_id_fk')
                 ->references('id')->on('whatsapp_templates')
-                ->nullOnDelete(); // ON DELETE SET NULL
+                ->nullOnDelete();
         });
 
         Schema::table('campaigns', function (Blueprint $table) {
-            try { $table->index('whatsapp_template_id', 'campaigns_template_idx'); } catch (\Throwable $e) {}
-            $table->foreign('whatsapp_template_id', 'campaigns_template_fk')
+            try { $table->index('whatsapp_template_id'); } catch (\Throwable $e) {}
+            $table->foreign('whatsapp_template_id', 'campaigns_whatsapp_template_id_fk')
                 ->references('id')->on('whatsapp_templates')
-                ->nullOnDelete(); // ON DELETE SET NULL
+                ->nullOnDelete();
         });
     }
 
     public function down(): void
     {
+        // Lepas FK yang barusan dibuat
         $this->dropFkIfExists('broadcasts', 'whatsapp_template_id');
         $this->dropFkIfExists('campaigns',  'whatsapp_template_id');
 
-        // (opsional) kembalikan tipe ke BIGINT UNSIGNED NULL tetap aman
-        DB::statement('ALTER TABLE `broadcasts` 
-            MODIFY `whatsapp_template_id` BIGINT UNSIGNED NULL');
-        DB::statement('ALTER TABLE `campaigns` 
-            MODIFY `whatsapp_template_id` BIGINT UNSIGNED NULL');
-
-        // (opsional) pasang lagi FK dengan CASCADE kalau memang mau
+        // (opsional) kembalikan ke cascade
         Schema::table('broadcasts', function (Blueprint $table) {
-            $table->foreign('whatsapp_template_id', 'broadcasts_template_fk')
+            $table->foreign('whatsapp_template_id', 'broadcasts_whatsapp_template_id_fk')
                 ->references('id')->on('whatsapp_templates')
                 ->cascadeOnDelete();
         });
 
         Schema::table('campaigns', function (Blueprint $table) {
-            $table->foreign('whatsapp_template_id', 'campaigns_template_fk')
+            $table->foreign('whatsapp_template_id', 'campaigns_whatsapp_template_id_fk')
                 ->references('id')->on('whatsapp_templates')
                 ->cascadeOnDelete();
         });
     }
 
     /**
-     * Drop semua foreign key yang mengikat kolom $column pada tabel $table (jika ada),
-     * termasuk index otomatisnya.
+     * Drop semua foreign key yang terkait dengan kolom $column pada $table.
+     * Juga coba drop index kolomnya jika dibuat otomatis.
      */
     private function dropFkIfExists(string $table, string $column): void
     {
@@ -102,10 +103,10 @@ return new class extends Migration
             }
         }
 
-        // Drop index pada kolom (kalau ada) supaya bisa pasang ulang dengan nama yang jelas
+        // Drop index yang menempel di kolom (kalau ada)
         try {
-            Schema::table($table, function (Blueprint $table) use ($column) {
-                try { $table->dropIndex([$column]); } catch (\Throwable $e) {}
+            Schema::table($table, function (Blueprint $t) use ($column) {
+                try { $t->dropIndex([$column]); } catch (\Throwable $e) {}
             });
         } catch (\Throwable $e) {}
     }
