@@ -6,6 +6,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Http\Client\PendingRequest;
 use App\Models\WhatsappWebhook;
 
 class WhatsAppService
@@ -19,8 +20,87 @@ class WhatsAppService
     {
         $this->token          = (string) config('services.whatsapp.token');
         $this->phoneId        = (string) config('services.whatsapp.phone_id');
-        $this->url            = rtrim((string) config('services.whatsapp.url'), '/'); // ex: https://graph.facebook.com/v20.0
+        $this->url            = rtrim((string) config('services.whatsapp.url'), '/'); // ex: https://graph.facebook.com/v23.0
         $this->businessNumber = (string) config('services.whatsapp.business_phone');
+    }
+
+    /* ------------------------------------------------------------
+     |  HTTP helpers: timeout lebih besar, force IPv4, retry
+     * -----------------------------------------------------------*/
+
+    protected function http(): PendingRequest
+    {
+        $timeout        = (int) config('services.whatsapp.timeout', 60);        // total timeout
+        $connectTimeout = (int) config('services.whatsapp.connect_timeout', 15); // waktu negosiasi TCP/TLS
+        $forceIpv4      = (bool) config('services.whatsapp.force_ipv4', true);
+
+        $req = Http::withToken($this->token)
+            ->acceptJson()
+            ->timeout($timeout)
+            ->connectTimeout($connectTimeout);
+
+        if ($forceIpv4) {
+            // Guzzle & cURL hints: paksa resolusi IPv4
+            $req = $req->withOptions([
+                'force_ip_resolve' => 'v4',
+                'curl' => [
+                    CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                ],
+            ]);
+        }
+
+        return $req;
+    }
+
+    protected function httpBinary(): PendingRequest
+    {
+        // Untuk download/upload biner (tanpa acceptJson)
+        $timeout        = (int) config('services.whatsapp.timeout', 60);
+        $connectTimeout = (int) config('services.whatsapp.connect_timeout', 15);
+        $forceIpv4      = (bool) config('services.whatsapp.force_ipv4', true);
+
+        $req = Http::withToken($this->token)
+            ->timeout($timeout)
+            ->connectTimeout($connectTimeout);
+
+        if ($forceIpv4) {
+            $req = $req->withOptions([
+                'force_ip_resolve' => 'v4',
+                'curl' => [
+                    CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                ],
+            ]);
+        }
+
+        return $req;
+    }
+
+    protected function plainHttp(): PendingRequest
+    {
+        // Untuk akses URL publik (tanpa token), mis. download sample dari internet
+        $timeout        = (int) config('services.whatsapp.timeout', 60);
+        $connectTimeout = (int) config('services.whatsapp.connect_timeout', 15);
+        $forceIpv4      = (bool) config('services.whatsapp.force_ipv4', true);
+
+        $req = Http::timeout($timeout)->connectTimeout($connectTimeout);
+
+        if ($forceIpv4) {
+            $req = $req->withOptions([
+                'force_ip_resolve' => 'v4',
+                'curl' => [
+                    CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+                ],
+            ]);
+        }
+
+        return $req;
+    }
+
+    protected function retries(): array
+    {
+        $times = (int) config('services.whatsapp.retry_times', 3);
+        $sleep = (int) config('services.whatsapp.retry_sleep', 500); // ms
+        return [$times, $sleep];
     }
 
     /* =======================
@@ -29,21 +109,30 @@ class WhatsAppService
 
     public function sendWhatsAppTemplateByName(string $to, string $templateName, array $components, string $lang = 'id'): array
     {
+        // Jangan kirim "components" jika kosong (template tanpa variable)
+        $template = [
+            'name'     => $templateName,
+            'language' => ['code' => $lang, 'policy' => 'deterministic'],
+        ];
+        if (!empty($components)) {
+            $template['components'] = $components;
+        }
+
         $payload = [
             'messaging_product' => 'whatsapp',
             'to'       => $to,
             'type'     => 'template',
-            'template' => [
-                'name'       => $templateName,
-                'language'   => ['code' => $lang, 'policy' => 'deterministic'],
-                'components' => $components,
-            ],
+            'template' => $template,
         ];
 
         \Log::info('WA API Request (template)', compact('to', 'templateName', 'payload'));
 
-        $res  = Http::withToken($this->token)->acceptJson()
+        [$times, $sleep] = $this->retries();
+
+        $res  = $this->http()
+            ->retry($times, $sleep)
             ->post("{$this->url}/{$this->phoneId}/messages", $payload);
+
         $res->throw();
 
         $resp = $res->json();
@@ -61,7 +150,6 @@ class WhatsAppService
                     'language'   => $lang,
                     'components' => $components,
                 ],
-                // taruh juga "text.body" sebagai fallback universal di UI
                 'text' => ['body' => $preview],
             ],
             data_get($resp, 'messages.0.id')
@@ -81,8 +169,12 @@ class WhatsAppService
 
         \Log::info('WA API Request (text)', compact('to', 'payload'));
 
-        $res  = Http::withToken($this->token)->acceptJson()
+        [$times, $sleep] = $this->retries();
+
+        $res  = $this->http()
+            ->retry($times, $sleep)
             ->post("{$this->url}/{$this->phoneId}/messages", $payload);
+
         $res->throw();
 
         $resp = $res->json();
@@ -109,8 +201,12 @@ class WhatsAppService
 
         \Log::info('WA API Request (media)', compact('to', 'type', 'payload'));
 
-        $res  = Http::withToken($this->token)->acceptJson()
+        [$times, $sleep] = $this->retries();
+
+        $res  = $this->http()
+            ->retry($times, $sleep)
             ->post("{$this->url}/{$this->phoneId}/messages", $payload);
+
         $res->throw();
 
         $resp = $res->json();
@@ -141,7 +237,10 @@ class WhatsAppService
 
         \Log::info('WA Upload (local path)', ['abs' => $abs, 'mime' => $mime]);
 
-        $response = Http::withToken($this->token)
+        [$times, $sleep] = $this->retries();
+
+        $response = $this->http()
+            ->retry($times, $sleep)
             ->attach('file', file_get_contents($abs), basename($abs))
             ->attach('messaging_product', 'whatsapp')
             ->attach('type', $mime)
@@ -167,7 +266,10 @@ class WhatsAppService
         $mime = $file->getMimeType() ?: 'application/octet-stream';
         \Log::info('WA Upload (UploadedFile)', ['real' => $real, 'mime' => $mime]);
 
-        $response = Http::withToken($this->token)
+        [$times, $sleep] = $this->retries();
+
+        $response = $this->http()
+            ->retry($times, $sleep)
             ->attach('file', file_get_contents($real), $file->getClientOriginalName() ?: basename($real))
             ->attach('messaging_product', 'whatsapp')
             ->attach('type', $mime)
@@ -187,7 +289,8 @@ class WhatsAppService
 
         \Log::info('WA Upload (download from URL)', ['url' => $url]);
 
-        $resp = Http::get($url)->throw();
+        // Download file publik (tanpa token)
+        $resp = $this->plainHttp()->get($url)->throw();
         $bin  = $resp->body();
         if ($bin === '' || $bin === null) {
             throw new \RuntimeException('Gagal mengunduh media dari URL.');
@@ -213,21 +316,19 @@ class WhatsAppService
        ====== DOWNLOAD =======
        ======================= */
 
-    /** Ambil info media (url, mime_type, file_size) dari Graph */
     public function getMediaInfo(string $mediaId): array
     {
-        $resp = Http::withToken($this->token)
-            ->get("{$this->url}/{$mediaId}")  // e.g. GET https://graph.facebook.com/v20.0/{media-id}
+        [$times, $sleep] = $this->retries();
+
+        $resp = $this->http()
+            ->retry($times, $sleep)
+            ->get("{$this->url}/{$mediaId}")
             ->throw()
             ->json();
 
         return is_array($resp) ? $resp : [];
     }
 
-    /**
-     * Unduh media ke disk "public" (folder wa_media) dan return URL publiknya.
-     * Cache berdasarkan {mediaId}.{ext} — kalau sudah ada, tidak download lagi.
-     */
     public function downloadMediaById(string $mediaId): string
     {
         $info = $this->getMediaInfo($mediaId);
@@ -246,8 +347,11 @@ class WhatsAppService
             return $disk->url($rel);
         }
 
-        // Unduh dengan Authorization
-        $bin = Http::withToken($this->token)
+        // Unduh biner dari Graph (butuh Authorization)
+        [$times, $sleep] = $this->retries();
+
+        $bin = $this->httpBinary()
+            ->retry($times, $sleep)
             ->get($url)
             ->throw()
             ->body();
@@ -313,9 +417,6 @@ class WhatsAppService
         return Storage::disk('local')->path($path);
     }
 
-    /**
-     * Buat preview text untuk template (agar tampil di bubble & summary).
-     */
     protected function buildTemplatePreviewText(string $name, array $components, string $lang): string
     {
         $vals = [];
@@ -352,7 +453,10 @@ class WhatsAppService
     public function downloadMediaToStorage(string $mediaId, string $disk = 'public', string $dir = 'wa_media'): array
     {
         // Step 1: get media URL & mime
-        $meta = Http::withToken($this->token)
+        [$times, $sleep] = $this->retries();
+
+        $meta = $this->http()
+            ->retry($times, $sleep)
             ->acceptJson()
             ->get("{$this->url}/{$mediaId}")
             ->throw()
@@ -362,19 +466,35 @@ class WhatsAppService
         $mime    = (string) data_get($meta, 'mime_type', 'application/octet-stream');
 
         // Step 2: download binary (auth required)
-        $bin = Http::withToken($this->token)->withHeaders([
-            'Accept' => '*/*',
-        ])->get($fileUrl)->throw()->body();
+        $bin = $this->httpBinary()
+            ->retry($times, $sleep)
+            ->withHeaders(['Accept' => '*/*'])
+            ->get($fileUrl)
+            ->throw()
+            ->body();
 
-        // simpan ke disk
         $ext  = explode('/', $mime)[1] ?? 'bin';
         $name = \Illuminate\Support\Str::ulid()->toBase32().'.'.$ext;
-        $path = trim($dir, '/').'/'.$name; // relative path di disk
+        $path = trim($dir, '/').'/'.$name;
 
         \Storage::disk($disk)->put($path, $bin);
         $abs  = \Storage::disk($disk)->path($path);
         $size = @filesize($abs) ?: strlen($bin);
 
         return [$path, $mime, $size];
+    }
+
+    public function is24hOpen(string $contact): bool
+    {
+        $lastInbound = \App\Models\WhatsappWebhook::inbound()
+            ->where('from_number', $contact)
+            ->orderByDesc('timestamp')
+            ->first();
+
+        if (!$lastInbound || !$lastInbound->timestamp) {
+            return false; // belum pernah reply → treat as closed
+        }
+
+        return now()->diffInSeconds($lastInbound->timestamp) < 24 * 3600;
     }
 }

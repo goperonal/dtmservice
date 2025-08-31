@@ -92,25 +92,75 @@ class Workspace extends Page
 
         $biz = (string) config('services.whatsapp.business_phone');
 
-        $rows = WhatsappWebhook::forContact($this->activePhone)
+        // 1) Ambil hanya pesan (bukan baris status)
+        $rows = \App\Models\WhatsappWebhook::forContact($this->activePhone)
+            ->where('event_type', 'message')
             ->orderBy('timestamp')
             ->get();
 
-        return $rows->map(function (WhatsappWebhook $w) use ($biz) {
-            $out   = $w->from_number === $biz;
-            $type  = $w->message_type ?: 'text';
-            $text  = $w->text_body ?: '';
-            $media = $w->media_proxy_url;
+        // 2) Kumpulkan message_id untuk pesan OUTBOUND (dari bisnis)
+        $outboundIds = $rows->where('from_number', $biz)
+            ->pluck('message_id')->filter()->unique()->values();
+
+        // 3) Ambil semua baris status untuk message_id tsb
+        $statusMap = collect();
+        if ($outboundIds->isNotEmpty()) {
+            $statusRows = \App\Models\WhatsappWebhook::query()
+                ->where('event_type', 'status')
+                ->whereIn('message_id', $outboundIds)
+                ->get(['message_id','status','id']); // pakai id untuk penentu "terbaru" jika perlu
+
+            // Prioritas status: read > delivered > sent > (lainnya)
+            $prio = ['failed' => 0, 'sent' => 1, 'delivered' => 2, 'read' => 3];
+
+            $statusMap = $statusRows
+                ->groupBy('message_id')
+                ->map(function ($g) use ($prio) {
+                    // pilih status dengan skor prioritas tertinggi
+                    $best = null; $bestScore = -1;
+                    foreach ($g as $row) {
+                        $s = strtolower((string) $row->status);
+                        $score = $prio[$s] ?? -1;
+                        if ($score > $bestScore) { $best = $row->status; $bestScore = $score; }
+                    }
+                    return $best;
+                });
+        }
+
+        // 4) Map ke array untuk view + pilih status TERBAIK antara kolom message.status vs statusMap
+        $prio = ['failed' => 0, 'sent' => 1, 'delivered' => 2, 'read' => 3];
+
+        return $rows->map(function (\App\Models\WhatsappWebhook $w) use ($biz, $statusMap, $prio) {
+            $out    = $w->from_number === $biz;
+            $type   = $w->message_type ?: 'text';
+            $text   = $w->text_body ?: '';
+            $media  = $w->media_proxy_url;
+            $time   = optional($w->timestamp)->timezone('Asia/Jakarta')->format('d M Y H:i');
+
+            // base status dari baris message
+            $base = strtolower((string) $w->status);
+            $final = $base;
+
+            // ambil status dari statusMap kalau pesan OUTBOUND
+            if ($out && $w->message_id) {
+                $fromMap = strtolower((string) ($statusMap->get($w->message_id) ?? ''));
+                if (($prio[$fromMap] ?? -1) > ($prio[$base] ?? -1)) {
+                    $final = $fromMap;
+                }
+            }
 
             return [
-                'out'  => $out,
-                'type' => $type,
-                'text' => $text,
-                'media'=> $media,
-                'time' => optional($w->timestamp)->timezone('Asia/Jakarta')->format('d M Y H:i'),
+                'out'    => $out,
+                'type'   => $type,
+                'text'   => $text,
+                'media'  => $media,
+                'time'   => $time,
+                'status' => $final ?: null,   // ← sekarang bisa jadi delivered/read
             ];
         })->all();
     }
+
+
 
     /* ===================== Lifecycle (file selected) ===================== */
 

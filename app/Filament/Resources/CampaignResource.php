@@ -20,7 +20,6 @@ use Illuminate\Support\Str;
 use Filament\Notifications\Notification;
 use Filament\Forms\Components\Actions\Action as FieldAction;
 use Filament\Forms\Components\View as ViewComponent;
-use Illuminate\Support\Facades\View as ViewFacade;
 use Filament\Forms\Components\Grid;
 
 class CampaignResource extends Resource
@@ -37,14 +36,13 @@ class CampaignResource extends Resource
                 ->label('Campaign Name')
                 ->required(),
 
-            // === PILIH TEMPLATE (pakai NAME) → SCAN BODY + RESET MAPPING ===
             Forms\Components\Select::make('whatsapp_template_name')
                 ->label('WhatsApp Template')
                 ->options(
                     WhatsAppTemplate::query()
                         ->where('status', 'APPROVED')
                         ->orderBy('name')
-                        ->pluck('name', 'name') // key & value = name
+                        ->pluck('name', 'name')
                 )
                 ->required()
                 ->searchable()
@@ -65,7 +63,6 @@ class CampaignResource extends Resource
                         })
                 ),
 
-            // === Mode kirim ===
             Forms\Components\Select::make('send_mode')
                 ->label('Send Mode')
                 ->options(['single' => 'Single Recipient', 'group' => 'Recipient Group'])
@@ -93,12 +90,10 @@ class CampaignResource extends Resource
                 ->dehydrated(fn (Get $get) => $get('send_mode') === 'group')
                 ->live(),
 
-            // === MAPPER & PREVIEW berdampingan 50:50 ===
             Grid::make(12)
                 ->visible(fn (Get $get) => filled($get('whatsapp_template_name')))
                 ->schema([
 
-                    // KIRI: Template Variables (50%)
                     Forms\Components\Fieldset::make('Template Variables')
                         ->columnSpan(['default' => 12, 'md' => 6])
                         ->schema([
@@ -116,10 +111,14 @@ class CampaignResource extends Resource
                                 ->deletable(false)
                                 ->reorderable(false)
                                 ->schema([
+                                    Forms\Components\Hidden::make('index'),
+                                    Forms\Components\Hidden::make('name'),
+
                                     Forms\Components\TextInput::make('placeholder')
                                         ->label('Placeholder')
                                         ->readOnly()
                                         ->columnSpan(6),
+
                                     Forms\Components\Select::make('recipient_field')
                                         ->label('Recipient Field')
                                         ->options([
@@ -136,7 +135,6 @@ class CampaignResource extends Resource
                                 ->columnSpan(12),
                         ]),
 
-                    // KANAN: Preview (50%)
                     ViewComponent::make('filament.whatsapp-template-preview')
                         ->columnSpan(['default' => 12, 'md' => 6])
                         ->reactive()
@@ -178,18 +176,9 @@ class CampaignResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')->searchable(),
-                // tampilkan nama template dari accessor snapshot/relasi-by-name
-                Tables\Columns\TextColumn::make('template_display')
-                    ->label('Template')
-                    ->sortable()
-                    ->toggleable(),
-
-                Tables\Columns\TextColumn::make('broadcast_messages_count')
-                    ->label('Recipients'),
-
-                Tables\Columns\TextColumn::make('created_at')
-                    ->dateTime('d M Y H:i', 'Asia/Jakarta')
-                    ->sortable(),
+                Tables\Columns\TextColumn::make('template_display')->label('Template')->sortable()->toggleable(),
+                Tables\Columns\TextColumn::make('broadcast_messages_count')->label('Recipients'),
+                Tables\Columns\TextColumn::make('created_at')->dateTime('d M Y H:i', 'Asia/Jakarta')->sortable(),
             ])
             ->recordUrl(fn ($record) => BroadcastResource::getUrl('index', [
                 'tableFilters[campaign_id][value]' => $record->id
@@ -213,17 +202,30 @@ class CampaignResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
-            // kalau mau tetap eager load relasi by name:
             ->with('whatsappTemplateByName')
             ->withCount('broadcastMessages');
     }
 
-    // ================= Helpers (BY NAME) =================
+    // ================= Helpers =================
 
-    /** Scan template by NAME → set ulang mappings dan simpan komponen + body ke state (untuk preview) */
+    /** Deteksi NAMED atau POSITIONAL dari snapshot template. */
+    public static function detectParameterFormatFromComponents(array $components, ?string $hint = null): string
+    {
+        $allText = self::collectAllStrings($components);
+        $flat    = self::normalizeText(implode("\n", $allText));
+
+        $hasNamed   = (bool) preg_match('/\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/u', $flat);
+        $hasNumeric = (bool) preg_match('/\{\{\s*\d+\s*\}\}/u', $flat);
+
+        if ($hasNamed && !$hasNumeric) return 'NAMED';
+        if ($hasNumeric && !$hasNamed) return 'POSITIONAL';
+        if ($hasNamed) return 'NAMED';
+        return strtoupper((string) ($hint ?: 'POSITIONAL'));
+    }
+
+    /** Scan template → set variable bindings default (NAMED atau POSITIONAL). */
     protected static function scanTemplateAndSetBindingsByName(Set $set, ?string $templateName, string $from = 'unknown'): void
     {
-        // reset supaya repeater & preview benar2 fresh
         $set('variable_bindings', []);
         $set('tpl_components', null);
         $set('debug_body', null);
@@ -235,45 +237,59 @@ class CampaignResource extends Resource
         if (!$tpl) return;
 
         $components = self::getTemplateComponentsArray($tpl);
-        $set('tpl_components', $components); // penting untuk preview
+        $set('tpl_components', $components);
 
-        // simpan sample komponen ke debug
         $sample = is_array($components) ? array_slice($components, 0, 2) : $components;
         $set('debug_components_json', json_encode($sample, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
 
-        // BODY.text → cari {{n}}, fallback scan semua komponen
         $rawBody = self::extractBodyTextFromComponents($components);
-        $set('debug_body', $rawBody); // untuk memastikan body memang terbaca
+        $set('debug_body', $rawBody);
 
         $bodyText = self::normalizeText($rawBody);
-        preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $bodyText, $m);
-        $nums = array_values(array_unique($m[1] ?? []));
+        $detectedFormat = self::detectParameterFormatFromComponents($components, $tpl->parameter_format ?? null);
 
-        if (empty($nums)) {
-            $allText = self::collectAllStrings($components);
-            $flat    = self::normalizeText(implode("\n", $allText));
-            preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $flat, $m2);
-            $nums    = array_values(array_unique($m2[1] ?? []));
+        if ($detectedFormat === 'NAMED') {
+            $names = self::extractNamedPlaceholdersOrderedFromComponents($components);
+            if (empty($names)) {
+                $names = self::extractNamedPlaceholders($bodyText);
+            }
+
+            $new = collect($names)->values()->map(fn ($nm, $i) => [
+                '_key'            => (string) Str::uuid(),
+                'placeholder'     => '{{' . $nm . '}}',
+                'name'            => (string) $nm,
+                'index'           => $i + 1,
+                'recipient_field' => 'name',
+            ])->all();
+        } else {
+            preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $bodyText, $m);
+            $nums = array_values(array_unique($m[1] ?? []));
+            if (empty($nums)) {
+                $allText = self::collectAllStrings($components);
+                $flat    = self::normalizeText(implode("\n", $allText));
+                preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $flat, $m2);
+                $nums    = array_values(array_unique($m2[1] ?? []));
+            }
+            sort($nums, SORT_NUMERIC);
+
+            $new = collect($nums)->map(fn ($n) => [
+                '_key'            => (string) Str::uuid(),
+                'placeholder'     => '{{' . $n . '}}',
+                'index'           => (int) $n,
+                'recipient_field' => 'name',
+            ])->values()->all();
         }
-
-        sort($nums, SORT_NUMERIC);
-        $new = collect($nums)->map(fn ($n) => [
-            '_key'            => (string) Str::uuid(), // paksa re-render repeater
-            'placeholder'     => '{{' . $n . '}}',
-            'index'           => (int) $n,
-            'recipient_field' => 'name',
-        ])->values()->all();
 
         $set('variable_bindings', $new);
 
         Notification::make()
             ->title('Template discan')
-            ->body(count($new) . ' placeholder ditemukan.')
+            ->body(count($new) . ' placeholder ditemukan. Format: ' . $detectedFormat)
             ->success()
             ->send();
     }
 
-    /** Ambil array komponen dari kolom template (body/components/component/content/template/payload/data …). Juga cari secara rekursif. */
+    /** Ambil list komponen dari berbagai bentuk penyimpanan. */
     public static function getTemplateComponentsArray(?WhatsAppTemplate $tpl): array
     {
         if (!$tpl) return [];
@@ -292,7 +308,6 @@ class CampaignResource extends Resource
             $arr = self::normalizeToArray($cand);
             if (empty($arr)) continue;
 
-            // associative dengan key 'components' / 'component'
             if (is_array($arr) && self::isAssoc($arr)) {
                 if (isset($arr['components']) && is_array($arr['components'])) {
                     $list = self::findComponentsRecursively($arr['components']);
@@ -304,7 +319,6 @@ class CampaignResource extends Resource
                 }
             }
 
-            // jika sudah berupa list komponen
             $list = self::findComponentsRecursively($arr);
             if (!empty($list)) return $list;
         }
@@ -361,6 +375,7 @@ class CampaignResource extends Resource
         return false;
     }
 
+    /** Ambil teks BODY dari komponen. */
     public static function extractBodyTextFromComponents(array $components): string
     {
         foreach ($components as $c) {
@@ -371,6 +386,7 @@ class CampaignResource extends Resource
         return '';
     }
 
+    /** Kumpulkan semua string dari node untuk keperluan deteksi. */
     protected static function collectAllStrings(array $components): array
     {
         $out = [];
@@ -382,6 +398,7 @@ class CampaignResource extends Resource
         return $out;
     }
 
+    /** Normalisasi teks (hapus ZW chars, CRLF → LF, dsb.). */
     protected static function normalizeText(string $s): string
     {
         $s = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $s);
@@ -394,12 +411,26 @@ class CampaignResource extends Resource
         return strtr($s, $map);
     }
 
-    protected static function extractNumericPlaceholders(string $s): array
+    /** Ekstrak daftar placeholder NAMED dari string. */
+    protected static function extractNamedPlaceholders(string $s): array
     {
-        preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $s, $m);
+        preg_match_all('/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/u', $s, $m);
         return array_values(array_unique($m[1] ?? []));
     }
 
+    /** Urutan nama placeholder NAMED sesuai kemunculan di BODY. */
+    protected static function extractNamedPlaceholdersOrderedFromComponents(array $components): array
+    {
+        $body = self::extractBodyTextFromComponents($components);
+        $body = self::normalizeText($body);
+        $names = [];
+        if (preg_match_all('/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/u', $body, $m)) {
+            $names = $m[1] ?? [];
+        }
+        return array_values(array_unique($names));
+    }
+
+    /** Untuk preview di panel kanan (header/body/footer/buttons). */
     protected static function extractPartsForPreview(array $components): array
     {
         $headerType = null; $headerText = null; $headerImageUrl = null;
@@ -417,7 +448,8 @@ class CampaignResource extends Resource
                     $headerText = (string) ($c['text'] ?? '');
                 } elseif ($format === 'IMAGE') {
                     $headerType = 'image';
-                    $headerImageUrl = data_get($c, 'example.header_handle.0');
+                    // preview pakai URL kalau ada, atau handle
+                    $headerImageUrl = data_get($c, 'example.header_url.0') ?: data_get($c, 'example.header_handle.0');
                 }
             }
 
@@ -437,16 +469,24 @@ class CampaignResource extends Resource
         return [$headerType, $headerText, $headerImageUrl, $bodyText, $footerText, $tplButtons];
     }
 
-    /** Render text fallback dengan binding numerik ke field recipient */
+    /**
+     * Render teks BODY dengan binding ke field recipient.
+     * - Mendukung POSITIONAL: {{1}}, {{2}}, ...
+     * - Mendukung NAMED: {{first_name}}, {{kode}}, ...
+     * - Placeholder yang tidak ada nilainya dibiarkan apa adanya.
+     */
     public static function renderBodyWithRecipientBindings(string $bodyText, array $bindings, \App\Models\Recipient $recipient): string
     {
         $bodyText = self::normalizeText($bodyText);
 
-        $values = [];
+        // Kumpulkan nilai dari bindings
+        $valuesByIndex = [];
+        $valuesByName  = [];
+
         foreach ($bindings as $b) {
             $idx   = $b['index'] ?? null;
+            $pname = $b['name']  ?? null;
             $field = $b['recipient_field'] ?? null;
-            if ($idx === null) continue;
 
             $val = '';
             if ($field) {
@@ -459,42 +499,47 @@ class CampaignResource extends Resource
                 }
             }
 
-            $values[(int) $idx] = $val;
+            if ($idx !== null) {
+                $valuesByIndex[(int) $idx] = $val;
+            }
+            if (!empty($pname)) {
+                $valuesByName[(string) $pname] = $val;
+            }
         }
 
-        if (empty($values)) return $bodyText;
-
-        return preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/u', function ($m) use ($values) {
-            $i = (int) ($m[1] ?? 0);
-            return array_key_exists($i, $values) ? $values[$i] : $m[0];
-        }, $bodyText);
-    }
-
-    public static function defaultBindingsFromComponents(array $components): array
-    {
-        $bodyText = self::normalizeText(self::extractBodyTextFromComponents($components));
-        preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $bodyText, $m);
-        $nums = array_values(array_unique($m[1] ?? []));
-
-        if (empty($nums)) {
-            $allText = self::collectAllStrings($components);
-            $flat    = self::normalizeText(implode("\n", $allText));
-            preg_match_all('/\{\{\s*(\d+)\s*\}\}/u', $flat, $m2);
-            $nums    = array_values(array_unique($m2[1] ?? []));
+        // Ganti NAMED terlebih dulu
+        if (!empty($valuesByName)) {
+            $bodyText = preg_replace_callback('/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/u', function ($m) use ($valuesByName) {
+                $key = (string) ($m[1] ?? '');
+                return array_key_exists($key, $valuesByName) ? $valuesByName[$key] : $m[0];
+            }, $bodyText);
         }
 
-        sort($nums, SORT_NUMERIC);
+        // Lalu ganti NUMERIC
+        if (!empty($valuesByIndex)) {
+            $bodyText = preg_replace_callback('/\{\{\s*(\d+)\s*\}\}/u', function ($m) use ($valuesByIndex) {
+                $i = (int) ($m[1] ?? 0);
+                return array_key_exists($i, $valuesByIndex) ? $valuesByIndex[$i] : $m[0];
+            }, $bodyText);
+        }
 
-        return collect($nums)->map(fn ($n) => [
-            'placeholder'     => '{{' . $n . '}}',
-            'index'           => (int) $n,
-            'recipient_field' => 'name',
-        ])->values()->all();
+        return $bodyText;
     }
 
-    public static function buildWaBodyComponentsFromBindings(array $bindings, \App\Models\Recipient $recipient): array
+    /**
+     * Build BODY components untuk panggilan Template API (NAMED/POSITIONAL).
+     */
+    public static function buildWaBodyComponentsFromBindings(
+        array $bindings,
+        \App\Models\Recipient $recipient,
+        string $parameterFormat = 'POSITIONAL'
+    ): array
     {
-        usort($bindings, fn($a, $b) => ($a['index'] ?? 0) <=> ($b['index'] ?? 0));
+        $isNamed = strtoupper($parameterFormat) === 'NAMED';
+
+        if (! $isNamed) {
+            usort($bindings, fn($a, $b) => ($a['index'] ?? 0) <=> ($b['index'] ?? 0));
+        }
 
         $params = [];
         foreach ($bindings as $b) {
@@ -511,12 +556,74 @@ class CampaignResource extends Resource
                 }
             }
 
-            $params[] = ['type' => 'text', 'text' => $val];
+            $entry = ['type' => 'text', 'text' => $val];
+            if ($isNamed && !empty($b['name'])) {
+                $entry['parameter_name'] = (string) $b['name'];
+            }
+            $params[] = $entry;
+        }
+
+        if (empty($params)) {
+            return [];
         }
 
         return [[
             'type' => 'body',
             'parameters' => $params,
         ]];
+    }
+
+    /**
+     * HEADER builder pakai LINK (tanpa upload).
+     * - Support format: IMAGE | VIDEO | DOCUMENT
+     * - Sumber URL: $fallbackUrl → example.header_url.0 → example.header_handle.0
+     * - URL relatif ("/storage/...") akan dijadikan absolut via APP_URL.
+     */
+    public static function buildWaHeaderComponentFromSnapshotUsingLink(
+        array $components,
+        ?string $fallbackUrl = null
+    ): ?array
+    {
+        $header = null;
+        foreach ($components as $c) {
+            if (is_array($c) && strtoupper((string) ($c['type'] ?? '')) === 'HEADER') {
+                $header = $c;
+                break;
+            }
+        }
+        if (!$header) return null;
+
+        $format = strtoupper((string) ($header['format'] ?? 'TEXT'));
+        if (!in_array($format, ['IMAGE','VIDEO','DOCUMENT'], true)) {
+            return null;
+        }
+
+        $url = $fallbackUrl
+            ?: (data_get($header, 'example.header_url.0') ?: data_get($header, 'example.header_handle.0'));
+
+        if (! $url) {
+            throw new \RuntimeException('Template butuh HEADER media, tapi URL tidak ditemukan.');
+        }
+
+        $abs = self::toAbsoluteUrl((string) $url);
+        $key = strtolower($format); // image|video|document
+
+        return [[
+            'type' => 'header',
+            'parameters' => [[
+                'type' => $key,
+                $key   => ['link' => $abs],
+            ]],
+        ]];
+    }
+
+    /** Ubah path relatif jadi URL absolut berdasarkan APP_URL. */
+    public static function toAbsoluteUrl(string $maybeUrl): string
+    {
+        if (preg_match('#^https?://#i', $maybeUrl)) {
+            return $maybeUrl;
+        }
+        $base = rtrim((string) config('app.url'), '/');
+        return $base . '/' . ltrim($maybeUrl, '/');
     }
 }

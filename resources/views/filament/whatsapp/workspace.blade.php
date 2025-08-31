@@ -109,9 +109,24 @@
                                 @endif
                             @endif
 
-                            <div style="font-size:11px; color:#6b7280; margin-top:4px; text-align:right;">
-                                {{ $m['time'] ?? '' }}
+                            <div style="font-size:11px; color:#6b7280; margin-top:4px; text-align:right; display:flex; gap:6px; align-items:center; justify-content:flex-end;">
+                                <span>{{ $m['time'] ?? '' }}</span>
+
+                                @if(!empty($m['out']))
+                                    @php $st = $m['status'] ?? null; @endphp
+
+                                    @if($st === 'read')
+                                        <span title="Dibaca" style="color:#2563eb;">✓✓</span>
+                                    @elseif($st === 'delivered')
+                                        <span title="Terkirim" style="color:#9ca3af;">✓✓</span>
+                                    @elseif($st === 'sent')
+                                        <span title="Terkirim ke server" style="color:#9ca3af;">✓</span>
+                                    @else
+                                        <span title="Mengirim…">•</span>
+                                    @endif
+                                @endif
                             </div>
+
                         </div>
                     </div>
                 </div>

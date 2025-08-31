@@ -30,11 +30,8 @@ class CreateCampaign extends CreateRecord
         $data['template_name']          = $tpl?->name ?? ($tplName ?: null);
         $data['whatsapp_template_name'] = $tpl?->name ?? ($tplName ?: null);
 
-        // Tentukan bahasa (default 'id', atau pilih 'id' dari daftar languages kalau tersedia)
-        $lang = 'id';
-        if (is_array($tpl?->languages) && ! empty($tpl->languages)) {
-            $lang = in_array('id', $tpl->languages, true) ? 'id' : (string) ($tpl->languages[0] ?? 'id');
-        }
+        // Bahasa: kolom languages berisi STRING dari hasil sync
+        $lang = (string) ($tpl?->languages ?: 'id');
         $data['template_language'] = $lang;
 
         // Snapshot komponen (buat preview/audit)
@@ -91,18 +88,16 @@ class CreateCampaign extends CreateRecord
             $rendered = \App\Filament\Resources\CampaignResource::renderBodyWithRecipientBindings(
                 (string) $rawBody,
                 $bindings,
-                $r->loadMissing('groups') // penting untuk field 'group'
+                $r->loadMissing('groups')
             );
 
             return [
                 'campaign_id'             => $campaign->id,
-                // biarkan id kalau ada, tapi nggak wajib
                 'whatsapp_template_id'    => $campaign->whatsapp_template_id,
-                // simpan juga NAME untuk tracking stabil
                 'whatsapp_template_name'  => $campaign->whatsapp_template_name,
                 'recipient_id'            => $r->id,
                 'to'                      => $r->phone,
-                'body'                    => $rendered,   // fallback text jika perlu
+                'body'                    => $rendered,
                 'status'                  => 'pending',
                 'created_at'              => $now,
                 'updated_at'              => $now,
@@ -146,11 +141,9 @@ class CreateCampaign extends CreateRecord
                 ->modalContent(function () {
                     $data = $this->form->getState();
 
-                    // Ambil kategori template by NAME (default UNKNOWN)
                     $tpl = WhatsAppTemplate::where('name', $data['whatsapp_template_name'] ?? null)->first();
                     $category = strtoupper((string) ($tpl->category ?? 'UNKNOWN'));
 
-                    // Hitung jumlah recipients sesuai mode
                     $recipients = 0;
                     $mode = $data['send_mode'] ?? 'single';
                     if ($mode === 'single') {
@@ -161,7 +154,6 @@ class CreateCampaign extends CreateRecord
                         })->distinct()->count('recipients.id');
                     }
 
-                    // Harga per recipient (config + default)
                     $priceMap = [
                         'MARKETING'      => config('services.whatsapp_prices.marketing', 586.33),
                         'UTILITY'        => config('services.whatsapp_prices.utility', 356.65),
@@ -170,7 +162,6 @@ class CreateCampaign extends CreateRecord
                     $price = $priceMap[$category] ?? $priceMap['AUTHENTICATION'];
                     $total = $recipients * $price;
 
-                    // view konfirmasi kamu
                     return view('confirm-campaign', [
                         'campaignName' => $data['name'] ?? '(Tanpa Nama)',
                         'category'     => $category,
