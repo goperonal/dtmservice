@@ -90,75 +90,82 @@ class Workspace extends Page
     {
         if (!$this->activePhone) return [];
 
-        $biz = (string) config('services.whatsapp.business_phone');
+        $biz  = (string) config('services.whatsapp.business_phone');
 
-        // 1) Ambil hanya pesan (bukan baris status)
         $rows = \App\Models\WhatsappWebhook::forContact($this->activePhone)
             ->where('event_type', 'message')
             ->orderBy('timestamp')
             ->get();
 
-        // 2) Kumpulkan message_id untuk pesan OUTBOUND (dari bisnis)
         $outboundIds = $rows->where('from_number', $biz)
             ->pluck('message_id')->filter()->unique()->values();
 
-        // 3) Ambil semua baris status untuk message_id tsb
         $statusMap = collect();
         if ($outboundIds->isNotEmpty()) {
             $statusRows = \App\Models\WhatsappWebhook::query()
                 ->where('event_type', 'status')
                 ->whereIn('message_id', $outboundIds)
-                ->get(['message_id','status','id']); // pakai id untuk penentu "terbaru" jika perlu
+                ->get(['message_id','status','payload','id']);
 
-            // Prioritas status: read > delivered > sent > (lainnya)
-            $prio = ['failed' => 0, 'sent' => 1, 'delivered' => 2, 'read' => 3];
+            // failed > read > delivered > sent
+            $prio = ['failed'=>99, 'read'=>3, 'delivered'=>2, 'sent'=>1];
 
-            $statusMap = $statusRows
-                ->groupBy('message_id')
-                ->map(function ($g) use ($prio) {
-                    // pilih status dengan skor prioritas tertinggi
-                    $best = null; $bestScore = -1;
-                    foreach ($g as $row) {
-                        $s = strtolower((string) $row->status);
-                        $score = $prio[$s] ?? -1;
-                        if ($score > $bestScore) { $best = $row->status; $bestScore = $score; }
+            $statusMap = $statusRows->groupBy('message_id')->map(function ($g) use ($prio) {
+                $best = null; $bestScore = -1;
+                $errCode = null; $errMsg = null;
+
+                foreach ($g as $row) {
+                    $s = strtolower((string)$row->status);
+                    $score = $prio[$s] ?? -1;
+
+                    if ($s === 'failed') {
+                        $p = json_decode((string)$row->payload, true) ?: [];
+                        $e = $p['errors'][0] ?? [];
+                        $errCode = $e['code'] ?? ($errCode ?? null);
+                        $errMsg  = $e['error_data']['details'] ?? $e['message'] ?? ($errMsg ?? null);
                     }
-                    return $best;
-                });
+
+                    if ($score > $bestScore) { $best = $s; $bestScore = $score; }
+                }
+
+                return ['status'=>$best, 'error_code'=>$errCode, 'error_message'=>$errMsg];
+            });
         }
 
-        // 4) Map ke array untuk view + pilih status TERBAIK antara kolom message.status vs statusMap
-        $prio = ['failed' => 0, 'sent' => 1, 'delivered' => 2, 'read' => 3];
+        $prio = ['failed'=>99, 'read'=>3, 'delivered'=>2, 'sent'=>1];
 
         return $rows->map(function (\App\Models\WhatsappWebhook $w) use ($biz, $statusMap, $prio) {
-            $out    = $w->from_number === $biz;
-            $type   = $w->message_type ?: 'text';
-            $text   = $w->text_body ?: '';
-            $media  = $w->media_proxy_url;
-            $time   = optional($w->timestamp)->timezone('Asia/Jakarta')->format('d M Y H:i');
+            $out   = $w->from_number === $biz;
 
-            // base status dari baris message
-            $base = strtolower((string) $w->status);
-            $final = $base;
+            $baseStatus = strtolower((string)$w->status);
+            $fromMap    = $out && $w->message_id ? ($statusMap->get($w->message_id) ?? null) : null;
 
-            // ambil status dari statusMap kalau pesan OUTBOUND
-            if ($out && $w->message_id) {
-                $fromMap = strtolower((string) ($statusMap->get($w->message_id) ?? ''));
-                if (($prio[$fromMap] ?? -1) > ($prio[$base] ?? -1)) {
-                    $final = $fromMap;
+            $final  = $baseStatus;
+            $ecode  = null;
+            $emsg   = null;
+
+            if ($fromMap) {
+                $mapStatus = strtolower((string)$fromMap['status']);
+                if (($prio[$mapStatus] ?? -1) > ($prio[$baseStatus] ?? -1)) {
+                    $final = $mapStatus;
+                    $ecode = $fromMap['error_code'] ?? null;
+                    $emsg  = $fromMap['error_message'] ?? null;
                 }
             }
 
             return [
-                'out'    => $out,
-                'type'   => $type,
-                'text'   => $text,
-                'media'  => $media,
-                'time'   => $time,
-                'status' => $final ?: null,   // ← sekarang bisa jadi delivered/read
+                'out'          => $out,
+                'type'         => $w->message_type ?: 'text',
+                'text'         => $w->text_body ?: '',
+                'media'        => $w->media_proxy_url,
+                'time'         => optional($w->timestamp)->timezone('Asia/Jakarta')->format('d M Y H:i'),
+                'status'       => $final ?: null,
+                'error_code'   => $ecode,
+                'error_message'=> $emsg,
             ];
         })->all();
     }
+
 
 
 

@@ -121,6 +121,11 @@
                                         <span title="Terkirim" style="color:#9ca3af;">✓✓</span>
                                     @elseif($st === 'sent')
                                         <span title="Terkirim ke server" style="color:#9ca3af;">✓</span>
+                                    @elseif($st === 'failed')
+                                        <span
+                                            title="Gagal: {{ e($m['error_message'] ?? 'Tidak terkirim') }}{{ !empty($m['error_code']) ? ' ('.e($m['error_code']).')' : '' }}"
+                                            style="color:#dc2626; font-weight:700;"
+                                        >&#9888;</span> {{-- ikon peringatan --}}
                                     @else
                                         <span title="Mengirim…">•</span>
                                     @endif
