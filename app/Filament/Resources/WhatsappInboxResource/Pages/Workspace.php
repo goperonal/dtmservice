@@ -53,7 +53,7 @@ class Workspace extends Page
             ->where('w.event_type', 'message')
             ->where(fn($q) => $q->where('w.from_number', $biz)->orWhere('w.to_number', $biz))
             ->selectRaw("CASE WHEN w.from_number = ? THEN w.to_number ELSE w.from_number END AS contact_phone", [$biz])
-            ->selectRaw("MAX(w.timestamp) AS last_at")
+            ->selectRaw("MAX(w.updated_at) AS last_at")
             ->selectRaw("MAX(w.id) AS last_id")
             ->groupBy('contact_phone')
             ->having('contact_phone', '<>', $biz)
@@ -94,7 +94,7 @@ class Workspace extends Page
 
         $rows = \App\Models\WhatsappWebhook::forContact($this->activePhone)
             ->where('event_type', 'message')
-            ->orderBy('timestamp')
+            ->orderBy('updated_at')
             ->get();
 
         $outboundIds = $rows->where('from_number', $biz)
@@ -158,7 +158,7 @@ class Workspace extends Page
                 'type'         => $w->message_type ?: 'text',
                 'text'         => $w->text_body ?: '',
                 'media'        => $w->media_proxy_url,
-                'time'         => optional($w->timestamp)->timezone('Asia/Jakarta')->format('d M Y H:i'),
+                'time'         => optional($w->updated_at)->timezone('Asia/Jakarta')->format('d M Y H:i'),
                 'status'       => $final ?: null,
                 'error_code'   => $ecode,
                 'error_message'=> $emsg,
