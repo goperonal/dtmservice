@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
 use App\Models\BroadcastMessage;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class WhatsappWebhook extends Model
 {
@@ -28,15 +30,84 @@ class WhatsappWebhook extends Model
 
     public function getPayloadArrayAttribute(): array
     {
-        $p = $this->attributes['payload'] ?? null;
-        if (is_array($p)) return $p;
+        // Ambil nilai RAW langsung dari DB, tidak lewat cast
+        $raw = $this->getRawOriginal('payload');
 
-        if (is_string($p)) {
-            $j = json_decode($p, true);               if (is_array($j)) return $j;
-            $j = json_decode(stripslashes($p), true); if (is_array($j)) return $j;
-            $j = json_decode(trim($p, "\"'"), true);  if (is_array($j)) return $j;
+        if (is_array($raw)) return $raw;
+        if (is_object($raw)) return json_decode(json_encode($raw), true) ?: [];
+
+        if (is_string($raw) && $raw !== '') {
+            // Coba decode biasa
+            $arr = json_decode($raw, true);
+            if (is_array($arr)) return $arr;
+
+            // Kalau gagal karena control chars, perbaiki lalu decode ulang
+            $fixed = $this->jsonEscapeControlCharsInsideStrings($raw);
+            $arr2  = json_decode($fixed, true);
+            if (is_array($arr2)) return $arr2;
+
+            // Coba varian strip slashes dan trim quotes setelah diperbaiki
+            foreach ([
+                stripslashes($fixed),
+                trim($fixed, "\"'"),
+                stripslashes(trim($fixed, "\"'")),
+            ] as $cand) {
+                $a = json_decode($cand, true);
+                if (is_array($a)) return $a;
+            }
         }
+
         return [];
+    }
+
+    /**
+     * Escape hanya karakter kontrol di DALAM string JSON.
+     * - Ubah \n menjadi \\n, \r menjadi \\r, dan kontrol < 0x20 menjadi \u00XX
+     * - Abaikan bagian di luar string agar struktur JSON tetap valid.
+     */
+    private function jsonEscapeControlCharsInsideStrings(string $s): string
+    {
+        $out = '';
+        $inString = false;
+        $escaped  = false;
+        $len = strlen($s);
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $s[$i];
+
+            if ($escaped) {
+                // karakter setelah backslash tetap ditulis apa adanya
+                $out .= $ch;
+                $escaped = false;
+                continue;
+            }
+
+            if ($ch === '\\') {
+                $out .= '\\';
+                $escaped = true;
+                continue;
+            }
+
+            if ($ch === '"') {
+                $out .= '"';
+                $inString = !$inString;
+                continue;
+            }
+
+            if ($inString) {
+                $ord = ord($ch);
+                if ($ch === "\n") { $out .= '\\n'; continue; }
+                if ($ch === "\r") { $out .= '\\r'; continue; }
+                if ($ord < 0x20) {
+                    $out .= sprintf('\\u%04x', $ord);
+                    continue;
+                }
+            }
+
+            $out .= $ch;
+        }
+
+        return $out;
     }
 
     /** === Teks/Caption untuk bubble. Template -> "Template: <nama>" === */
@@ -44,27 +115,29 @@ class WhatsappWebhook extends Model
     {
         $a = $this->payload_array;
 
-        // teks biasa
-        if ($t = data_get($a, 'text.body')) {
-            return $t;
+        $v = data_get($a, 'text.body')
+        ?? data_get($a, 'messages.0.text.body')
+        ?? data_get($a, 'entry.0.changes.0.value.messages.0.text.body');
+        if (is_string($v) || is_numeric($v)) return (string) $v;
+
+        foreach ([
+            'image.caption','video.caption','document.caption','audio.caption','sticker.caption',
+            'messages.0.image.caption','messages.0.video.caption','messages.0.document.caption',
+        ] as $path) {
+            $cap = data_get($a, $path);
+            if (is_string($cap) || is_numeric($cap)) return (string) $cap;
         }
 
-        // caption media
-        foreach (['image','video','document','audio','sticker'] as $k) {
-            if ($cap = data_get($a, "{$k}.caption")) {
-                return $cap;
-            }
-        }
-
-        // template → TAMPILKAN HANYA NAMA
-        if (($a['type'] ?? null) === 'template') {
+        if ((data_get($a, 'type') === 'template') || (data_get($a, 'messages.0.type') === 'template')) {
             $name = data_get($a, 'template.name')
-                ?: optional($this->broadcast)->template_name; // fallback dari campaign bila ada
+                ?? data_get($a, 'messages.0.template.name')
+                ?? optional($this->broadcast)->template_name;
             return $name ? "Template: {$name}" : 'Template';
         }
 
         return null;
     }
+
 
     public function getMessageTypeAttribute(): ?string
     {
@@ -95,7 +168,7 @@ class WhatsappWebhook extends Model
     public function getSummaryAttribute(): string
     {
         $a = $this->payload_array;
-
+        
         if ($t = data_get($a, 'text.body')) return $t;
         if ($c = data_get($a, 'image.caption')) return $c;
         if ($c = data_get($a, 'document.caption')) return $c;
